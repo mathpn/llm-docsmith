@@ -1,5 +1,5 @@
 import sys
-from typing import Protocol
+from typing import Literal, Protocol
 
 import libcst as cst
 from ollama import ChatResponse, chat
@@ -21,14 +21,16 @@ Input code:
 
 Do not return any code. Return concise documentation only. Follow each programming language conventions for documentation.
 The documentation should always precisely indicate the arguments and return types. For classes, the documentation should
-state the purpose of the class.
+state the purpose of the class. The name property of docstring should include class names following the format `<class_name>.<method_name>`
+for methods and the format `<class_name>` for the class docstring itself.
 
 Use the context only to learn about the code. Write documentation only for the code provided as input code.
-Do not explain how each function is implemented, focus on its purpose, arguments and returns.
+Do not explain how each function is implemented, focus on its purpose, arguments and returns. Return as JSON.
 """
 
 
 class Docstring(BaseModel):
+    node_type: Literal["class", "function", "method"]
     name: str
     docstring: str
 
@@ -43,7 +45,17 @@ class DocstringGenerator(Protocol):
 
 class DocstringTransformer(cst.CSTTransformer):
     def __init__(self, docstring_generator: DocstringGenerator):
+        self._current_class: str | None = None
+        self._doc: Documentation | None = None
         self.docstring_gen = docstring_generator
+
+    def visit_ClassDef(self, node) -> bool | None:
+        self._current_class = node.name.value
+        source_lines = cst.Module([node]).code
+        # TODO add context
+        doc = self.docstring_gen(source_lines, "")
+        self._doc = doc
+        return super().visit_ClassDef(node)
 
     def _modify_docstring(self, body, new_docstring):
         # If body is an IndentedBlock, extract its body
@@ -81,18 +93,30 @@ class DocstringTransformer(cst.CSTTransformer):
 
     def leave_FunctionDef(self, original_node, updated_node):
         source_lines = cst.Module([updated_node]).code
+
         # TODO add context
-        doc = self.docstring_gen(source_lines, "")
-        new_docstring = find_docstring_by_name(doc, updated_node.name.value)
+        if self._current_class is None:
+            doc = self.docstring_gen(source_lines, "")
+            name = updated_node.name.value
+        elif self._doc is not None:
+            doc = self._doc
+            name = f"{self._current_class}.{updated_node.name.value}"
+        else:
+            return updated_node
+
+        new_docstring = find_docstring_by_name(doc, name)
         new_body = self._modify_docstring(updated_node.body, new_docstring)
         return updated_node.with_changes(body=new_body)
 
     def leave_ClassDef(self, original_node, updated_node):
-        source_lines = cst.Module([updated_node]).code
-        # TODO add context
-        doc = self.docstring_gen(source_lines, "")
-        new_docstring = find_docstring_by_name(doc, updated_node.name.value)
+        self._current_class = None
+
+        if self._doc is None:
+            return updated_node
+
+        new_docstring = find_docstring_by_name(self._doc, updated_node.name.value)
         new_body = self._modify_docstring(updated_node.body, new_docstring)
+
         return updated_node.with_changes(body=new_body)
 
 
