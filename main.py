@@ -193,6 +193,10 @@ def find_class_defs(node):
     return class_defs
 
 
+def has_return_stmt(node):
+    return any(isinstance(n, ast.Return) for n in ast.walk(node))
+
+
 def extract_signatures(module: cst.Module, node: cst.CSTNode) -> Documentation:
     source = module.code_for_node(node)
 
@@ -284,14 +288,12 @@ def extract_signature(function_node: ast.FunctionDef | ast.AsyncFunctionDef):
         )
 
     # Extract return type
-    return_type = ast.unparse(function_node.returns) if function_node.returns else None
-
-    # TODO check if there is any return
-    ret = (
-        Return(description="<SLOT>", annotation=return_type)
-        if return_type is not None
-        else None
-    )
+    ret = None
+    if has_return_stmt(function_node):
+        return_type = (
+            ast.unparse(function_node.returns) if function_node.returns else "Any"
+        )
+        ret = Return(description="<SLOT>", annotation=return_type)
 
     return Docstring(
         node_type="function",
@@ -318,16 +320,17 @@ def docstring_to_str(docstring: Docstring) -> str:
             arg_string += f" (default {arg.default})"
         args_strings.append(arg_string)
 
-    string = f"{docstring.docstring}"
+    string = f"{docstring.docstring}\n"
 
     if args_strings:
-        string += f"""\n\nParameters:
+        string += f"""\nParameters:
 -----------
 
-{"\n".join(args_strings)}"""
+{"\n".join(args_strings)}
+"""
 
     if docstring.ret is not None:
-        string += f"""\n\nReturns:
+        string += f"""\nReturns:
 --------
 
     {docstring.ret.annotation} : {docstring.ret.description}
