@@ -172,7 +172,7 @@ class DocstringTransformer(cst.CSTTransformer):
 def find_function_defs(node):
     function_defs = []
 
-    if isinstance(node, ast.FunctionDef):
+    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
         function_defs.append(node)
 
     for child_node in ast.iter_child_nodes(node):
@@ -181,15 +181,32 @@ def find_function_defs(node):
     return function_defs
 
 
-# TODO add class entry
+def find_class_defs(node):
+    class_defs = []
+
+    if isinstance(node, ast.ClassDef):
+        class_defs.append(node)
+
+    for child_node in ast.iter_child_nodes(node):
+        class_defs.extend(find_class_defs(child_node))
+
+    return class_defs
+
+
 def extract_signatures(module: cst.Module, node: cst.CSTNode) -> Documentation:
     source = module.code_for_node(node)
 
     tree = ast.parse(source)
     function_defs = find_function_defs(tree)
 
-    return Documentation(entries=[extract_signature(node) for node in function_defs])
+    class_defs = find_class_defs(tree)
+    function_entries = [extract_signature(node) for node in function_defs]
+    class_entries = [
+        Docstring(node_type="class", name=node.name, docstring="<SLOT>")
+        for node in class_defs
+    ]
 
+    return Documentation(entries=[*class_entries, *function_entries])
 
 def extract_signature(function_node: ast.FunctionDef | ast.AsyncFunctionDef):
     function_name = function_node.name
@@ -269,32 +286,6 @@ def extract_signature(function_node: ast.FunctionDef | ast.AsyncFunctionDef):
     )
 
 
-def extract_method_names(node: cst.ClassDef) -> list[str]:
-    method_names = []
-    for statement in node.body.body:
-        # Check if the statement is a function definition
-        if isinstance(statement, cst.FunctionDef):
-            # Extract the method name
-            method_name = statement.name.value
-
-            # Optional: Check if it's a special method (like __init__)
-            # or a regular method
-            is_special_method = method_name.startswith("__") and method_name.endswith(
-                "__"
-            )
-            is_private_method = not is_special_method and method_name.startswith("_")
-
-            method_names.append(
-                {
-                    "name": method_name,
-                    "is_special_method": is_special_method,
-                    "is_private_method": is_private_method,
-                }
-            )
-
-    return [m["name"] for m in method_names]
-
-
 def find_docstring_by_name(doc: Documentation, name: str) -> Docstring | None:
     entries = [entry for entry in doc.entries if entry.name == name]
     return entries[0] if entries else None
@@ -317,11 +308,10 @@ def docstring_to_str(docstring: Docstring) -> str:
         string += f"""\n\nParameters:
 -----------
 
-{"\n".join(args_strings)}
-"""
+{"\n".join(args_strings)}"""
 
     if docstring.ret is not None:
-        string += f"""\nReturns:
+        string += f"""\n\nReturns:
 --------
 
     {docstring.ret.annotation} : {docstring.ret.description}
