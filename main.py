@@ -198,8 +198,13 @@ def extract_signatures(module: cst.Module, node: cst.CSTNode) -> Documentation:
 
     tree = ast.parse(source)
     function_defs = find_function_defs(tree)
+    # TODO argument
+    function_defs = filter(lambda x: not is_private(x), function_defs)
+    function_defs = filter(lambda x: not is_dunder(x), function_defs)
 
     class_defs = find_class_defs(tree)
+    class_defs = filter(lambda x: not is_private(x), class_defs)
+
     function_entries = [extract_signature(node) for node in function_defs]
     class_entries = [
         Docstring(node_type="class", name=node.name, docstring="<SLOT>")
@@ -207,6 +212,17 @@ def extract_signatures(module: cst.Module, node: cst.CSTNode) -> Documentation:
     ]
 
     return Documentation(entries=[*class_entries, *function_entries])
+
+
+def is_private(node):
+    name = node.name
+    return name.startswith("_") and not is_dunder(node)
+
+
+def is_dunder(node):
+    name = node.name
+    return name.startswith("__") and name.endswith("__")
+
 
 def extract_signature(function_node: ast.FunctionDef | ast.AsyncFunctionDef):
     function_name = function_node.name
