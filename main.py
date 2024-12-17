@@ -194,7 +194,9 @@ def find_class_defs(node):
 
 
 def has_return_stmt(node):
-    return any(isinstance(n, ast.Return) for n in ast.walk(node))
+    return any(
+        isinstance(n, ast.Return) and n.value is not None for n in ast.walk(node)
+    )
 
 
 def extract_signatures(module: cst.Module, node: cst.CSTNode) -> Documentation:
