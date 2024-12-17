@@ -8,11 +8,7 @@ from pydantic import BaseModel
 
 PROMPT_FILL = """
 You are a coding assistant whose task is to generate docstrings for existing code. You will receive code without any docstrings.
-Generate the appropiate docstrings for each function, class or method. Important context:
-
-```python
-{CONTEXT}
-```
+Generate the appropiate docstrings for each function, class or method. {CONTEXT}
 
 Input code:
 
@@ -171,18 +167,17 @@ class DocstringTransformer(cst.CSTTransformer):
         return updated_node.with_changes(body=new_body)
 
 
-# XXX only top level functions?
-def find_function_defs(tree) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+def find_function_definitions(tree) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
     function_defs = []
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             function_defs.append(node)
 
     return function_defs
 
 
-def find_class_defs(tree) -> list[ast.ClassDef]:
+def find_class_definitions(tree) -> list[ast.ClassDef]:
     function_defs = []
 
     for node in ast.walk(tree):
@@ -192,35 +187,58 @@ def find_class_defs(tree) -> list[ast.ClassDef]:
     return function_defs
 
 
-# Function to collect all called functions and instantiated classes from a given function's body
-def collect_calls_and_instantiations(
+def find_top_level_definitions(
+    tree,
+) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef]:
+    definitions = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            definitions[node.name] = node
+    return definitions
+
+
+def collect_entities(
     node,
     definitions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef],
-):
-    calls_and_instantiations = []
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef]:
+    entities = set()
+
     for node in ast.walk(node):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            name = node.func.id
-            if name in definitions:
-                calls_and_instantiations.append(definitions[name])
-    return calls_and_instantiations
+        match node:
+            case ast.Call(func=ast.Name(name)):
+                entities.add(definitions.get(name))
+            case (
+                ast.AnnAssign(annotation=ast.Name(name))
+                | ast.arg(annotation=ast.Name(name))
+            ):
+                entities.add(definitions.get(name))
+            case (
+                ast.AnnAssign(
+                    annotation=ast.Subscript(
+                        value=ast.Name(subs_name), slice=ast.Name(name)
+                    )
+                )
+                | ast.arg(
+                    annotation=ast.Subscript(
+                        value=ast.Name(subs_name), slice=ast.Name(name)
+                    )
+                )
+            ):
+                entities.add(definitions.get(name))
+                entities.add(definitions.get(subs_name))
+
+    return list(e for e in entities if e is not None)
 
 
 def get_context(module: cst.Module, node: cst.CSTNode) -> str:
     source = module.code
 
     tree = ast.parse(source)
-    function_defs = find_function_defs(tree)
-    function_dict = {node.name: node for node in function_defs}
-
-    class_defs = find_class_defs(tree)
-    class_dict = {node.name: node for node in class_defs}
+    definitions = find_top_level_definitions(tree)
 
     node_source = module.code_for_node(node)
     node_tree = ast.parse(node_source)
-    referenced_functions = collect_calls_and_instantiations(
-        node_tree, {**function_dict, **class_dict}
-    )
+    referenced_functions = collect_entities(node_tree, definitions)
 
     out = "\n".join(ast.unparse(func) for func in referenced_functions)
     return out
@@ -236,12 +254,12 @@ def extract_signatures(module: cst.Module, node: cst.CSTNode) -> Documentation:
     source = module.code_for_node(node)
 
     tree = ast.parse(source)
-    function_defs = find_function_defs(tree)
+    function_defs = find_function_definitions(tree)
     # TODO argument
     function_defs = filter(lambda x: not is_private(x), function_defs)
     function_defs = filter(lambda x: not is_dunder(x), function_defs)
 
-    class_defs = find_class_defs(tree)
+    class_defs = find_class_definitions(tree)
     class_defs = filter(lambda x: not is_private(x), class_defs)
 
     function_entries = [extract_signature(node) for node in function_defs]
@@ -385,6 +403,7 @@ def docstring_to_str(docstring: Docstring) -> str:
 def generate_docstring(
     input_code: str, context: str, template: Documentation
 ) -> Documentation:
+    context = f"Important context:\n\n```python\n{context}\n```" if context else ""
     response: ChatResponse = chat(
         model="llama3.1",
         messages=[
