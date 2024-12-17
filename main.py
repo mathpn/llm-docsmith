@@ -85,7 +85,8 @@ class DocstringTransformer(cst.CSTTransformer):
         source_lines = cst.Module([node]).code
         # TODO add context
         template = extract_signatures(self.module, node)
-        doc = self.docstring_gen(source_lines, "", template)
+        context = get_context(self.module, node)
+        doc = self.docstring_gen(source_lines, context, template)
         self._doc = doc
         return super().visit_ClassDef(node)
 
@@ -130,7 +131,8 @@ class DocstringTransformer(cst.CSTTransformer):
         # TODO add context
         if self._current_class is None:
             template = extract_signatures(self.module, updated_node)
-            doc = self.docstring_gen(source_lines, "", template)
+            context = get_context(self.module, updated_node)
+            doc = self.docstring_gen(source_lines, context, template)
         elif self._doc is not None:
             doc = self._doc
         else:
@@ -169,28 +171,59 @@ class DocstringTransformer(cst.CSTTransformer):
         return updated_node.with_changes(body=new_body)
 
 
-def find_function_defs(node):
+# XXX only top level functions?
+def find_function_defs(tree) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
     function_defs = []
 
-    if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
-        function_defs.append(node)
-
-    for child_node in ast.iter_child_nodes(node):
-        function_defs.extend(find_function_defs(child_node))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+            function_defs.append(node)
 
     return function_defs
 
 
-def find_class_defs(node):
-    class_defs = []
+def find_class_defs(tree) -> list[ast.ClassDef]:
+    function_defs = []
 
-    if isinstance(node, ast.ClassDef):
-        class_defs.append(node)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            function_defs.append(node)
 
-    for child_node in ast.iter_child_nodes(node):
-        class_defs.extend(find_class_defs(child_node))
+    return function_defs
 
-    return class_defs
+
+# Function to collect all called functions and instantiated classes from a given function's body
+def collect_calls_and_instantiations(
+    node,
+    definitions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef],
+):
+    calls_and_instantiations = []
+    for node in ast.walk(node):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            name = node.func.id
+            if name in definitions:
+                calls_and_instantiations.append(definitions[name])
+    return calls_and_instantiations
+
+
+def get_context(module: cst.Module, node: cst.CSTNode) -> str:
+    source = module.code
+
+    tree = ast.parse(source)
+    function_defs = find_function_defs(tree)
+    function_dict = {node.name: node for node in function_defs}
+
+    class_defs = find_class_defs(tree)
+    class_dict = {node.name: node for node in class_defs}
+
+    node_source = module.code_for_node(node)
+    node_tree = ast.parse(node_source)
+    referenced_functions = collect_calls_and_instantiations(
+        node_tree, {**function_dict, **class_dict}
+    )
+
+    out = "\n".join(ast.unparse(func) for func in referenced_functions)
+    return out
 
 
 def has_return_stmt(node):
