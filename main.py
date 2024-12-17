@@ -48,7 +48,7 @@ class Argument(BaseModel):
 
 class Return(BaseModel):
     description: str
-    annotation: str = "Any"
+    annotation: str | None
 
 
 class Docstring(BaseModel):
@@ -293,7 +293,7 @@ def extract_signature(function_node: ast.FunctionDef | ast.AsyncFunctionDef):
     ret = None
     if has_return_stmt(function_node):
         return_type = (
-            ast.unparse(function_node.returns) if function_node.returns else "Any"
+            ast.unparse(function_node.returns) if function_node.returns else None
         )
         ret = Return(description="<SLOT>", annotation=return_type)
 
@@ -331,11 +331,20 @@ def docstring_to_str(docstring: Docstring) -> str:
 {"\n".join(args_strings)}
 """
 
-    if docstring.ret is not None:
+    # XXX
+    if docstring.ret is not None and (
+        docstring.ret.description or docstring.ret.annotation
+    ):
+        print(docstring.ret)
+        if docstring.ret.annotation:
+            ret_string = f"{docstring.ret.annotation} : {docstring.ret.description}"
+        else:
+            ret_string = f"{docstring.ret.description}"
+
         string += f"""\nReturns:
 --------
 
-    {docstring.ret.annotation} : {docstring.ret.description}
+    {ret_string}
 """
     return string
 
