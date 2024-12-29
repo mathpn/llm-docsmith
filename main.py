@@ -35,6 +35,9 @@ Template:
 """
 
 
+INDENT = "    "
+
+
 class Argument(BaseModel):
     name: str
     description: str
@@ -65,18 +68,41 @@ class DocstringGenerator(Protocol):
     ) -> Documentation: ...
 
 
+def create_docstring_node(docstring_text: str, indent: str) -> cst.BaseStatement:
+    lines = docstring_text.strip().split("\n")
+
+    indented_lines = []
+    for line in lines:
+        indented_lines.append(indent + line if line.strip() else line)
+
+    return cst.SimpleStatementLine(
+        body=[
+            cst.Expr(
+                value=cst.SimpleString(
+                    value=f'"""\n{"\n".join(indented_lines)}\n{indent}"""'
+                )
+            )
+        ]
+    )
+
+
 class DocstringTransformer(cst.CSTTransformer):
     def __init__(self, docstring_generator: DocstringGenerator, module: cst.Module):
         self._current_class: str | None = None
         self._doc: Documentation | None = None
         self.module: cst.Module = module
         self.docstring_gen = docstring_generator
+        self.indentation_level = 0
 
     def visit_Module(self, node):
         self.module = node
         return True
 
+    def visit_FunctionDef(self, node):
+        self.indentation_level += 1
+
     def visit_ClassDef(self, node) -> bool | None:
+        self.indentation_level += 1
         self._current_class = node.name.value
         source_lines = cst.Module([node]).code
         # TODO add context
@@ -110,9 +136,8 @@ class DocstringTransformer(cst.CSTTransformer):
 
         # No existing docstring - add new one if provided
         elif new_docstring:
-            new_docstring_node = cst.SimpleStatementLine(
-                body=[cst.Expr(value=cst.SimpleString(f'"""{new_docstring}"""'))]
-            )
+            indent = INDENT * (self.indentation_level + 1)
+            new_docstring_node = create_docstring_node(new_docstring, indent)
             body_statements.insert(0, new_docstring_node)
 
         # Reconstruct the body
@@ -121,6 +146,7 @@ class DocstringTransformer(cst.CSTTransformer):
         return tuple(body_statements)
 
     def leave_FunctionDef(self, original_node, updated_node):
+        self.indentation_level -= 1
         source_lines = cst.Module([updated_node]).code
 
         name = updated_node.name.value
@@ -144,9 +170,11 @@ class DocstringTransformer(cst.CSTTransformer):
         new_body = self._modify_docstring(
             updated_node.body, docstring_to_str(new_docstring)
         )
+
         return updated_node.with_changes(body=new_body)
 
     def leave_ClassDef(self, original_node, updated_node):
+        self.indentation_level -= 1
         self._current_class = None
 
         if self._doc is None:
