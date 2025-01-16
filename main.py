@@ -7,8 +7,24 @@ from ollama import ChatResponse, chat
 from pydantic import BaseModel
 
 PROMPT_FILL = """
-You are a coding assistant whose task is to generate docstrings for existing code. You will receive code without any docstrings.
-Generate the appropiate docstrings for each function, class or method. {CONTEXT}
+You are a coding assistant whose task is to generate docstrings for existing code.
+You will receive code without any docstrings.
+Generate the appropiate docstrings for each function, class or method.
+
+Do not return any code. Use the context only to learn about the code.
+Write documentation only for the code provided as input code.
+
+The docstring prescribes the function or method’s effect as a command, not as a description; e.g. don’t write “Returns the pathname …”.
+Do not explain implementation details, do not include information about arguments and return here.
+If the docstring is multiline, the first line should be a very short summary, followed by a blank line and a more ellaborate description.
+Write single-line docstrings if the function is simple.
+The docstring for a class should summarize its behavior and list the public methods (one by line) and instance variables.
+
+In the Argument object, describe each argument. In the return object, describe the returned values of the function, if any.
+
+You will receive JSON template below. Fill the slots marked with <SLOT> with the appropriate description. Return as JSON.
+
+{CONTEXT}
 
 Input code:
 
@@ -16,18 +32,7 @@ Input code:
 {CODE}
 ```
 
-Do not return any code. Return concise documentation only. Follow each programming language conventions for documentation.
-For classes, the documentation should state the purpose of the class.
-
-Use the context only to learn about the code. Write documentation only for the code provided as input code.
-You will receive JSON template below. Fill the slots marked with <SLOT> with the appropriate description. Return as JSON.
-
-In the Docstring object, do not explain implementation details, focus on the purpose of the function or class. Do not include
-information about arguments and return here.
-
-In the Argument object, describe each argument. In the return object, describe the returned values of the function, if any.
-
-Template:
+Output template:
 
 ```json
 {TEMPLATE}
