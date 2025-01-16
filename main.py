@@ -419,7 +419,6 @@ def docstring_to_str(docstring: Docstring) -> str:
     if docstring.ret is not None and (
         docstring.ret.description or docstring.ret.annotation
     ):
-        print(docstring.ret)
         if docstring.ret.annotation:
             ret_string = f"{docstring.ret.annotation} : {docstring.ret.description}"
         else:
@@ -433,12 +432,12 @@ def docstring_to_str(docstring: Docstring) -> str:
     return string
 
 
-def generate_docstring(
+def ollama_docstring_generator(
     input_code: str, context: str, template: Documentation
 ) -> Documentation:
     context = f"Important context:\n\n```python\n{context}\n```" if context else ""
     response: ChatResponse = chat(
-        model="llama3.1",
+        model="phi4",
         messages=[
             {
                 "role": "user",
@@ -469,7 +468,7 @@ def modify_docstring(source_code, docstring_generator: DocstringGenerator):
 def main():
     source = read_source(sys.argv[1])
 
-    modified_source = modify_docstring(source, generate_docstring)
+    modified_source = modify_docstring(source, ollama_docstring_generator)
 
     with open("out.py", "w") as f:
         f.write(modified_source)
