@@ -1,5 +1,6 @@
+import argparse
 import ast
-import sys
+from functools import partial
 from typing import Literal, Protocol
 
 import libcst as cst
@@ -433,11 +434,11 @@ def docstring_to_str(docstring: Docstring) -> str:
 
 
 def ollama_docstring_generator(
-    input_code: str, context: str, template: Documentation
+    input_code: str, context: str, template: Documentation, model: str = "qwen2.5-coder"
 ) -> Documentation:
     context = f"Important context:\n\n```python\n{context}\n```" if context else ""
     response: ChatResponse = chat(
-        model="phi4",
+        model=model,
         messages=[
             {
                 "role": "user",
@@ -466,11 +467,24 @@ def modify_docstring(source_code, docstring_generator: DocstringGenerator):
 
 
 def main():
-    source = read_source(sys.argv[1])
+    parser = argparse.ArgumentParser(
+        description="Modify Python source code to add docstrings."
+    )
+    parser.add_argument(
+        "filepath", type=str, help="Path to the Python source file to be modified."
+    )
+    parser.add_argument("--model", type=str, help="LLM model to be used")
+    args = parser.parse_args()
+
+    source = read_source(args.filepath)
+
+    docstring_generator = ollama_docstring_generator
+    if args.model:
+        docstring_generator = partial(docstring_generator, model=args.model)
 
     modified_source = modify_docstring(source, ollama_docstring_generator)
 
-    with open("out.py", "w") as f:
+    with open(args.filepath, "w") as f:
         f.write(modified_source)
 
 
