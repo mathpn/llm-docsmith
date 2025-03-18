@@ -3,15 +3,10 @@ import ast
 from functools import partial
 from typing import Literal, Protocol
 
-import llm
 import click
 import libcst as cst
+import llm
 from pydantic import BaseModel
-
-
-from llm import hookimpl
-import click
-
 
 PROMPT_FILL = """
 You are a coding assistant whose task is to generate docstrings for existing code.
@@ -473,43 +468,30 @@ def modify_docstring(source_code, docstring_generator: DocstringGenerator):
     return modified_module.code
 
 
-@hookimpl
+@llm.hookimpl
 def register_commands(cli):
     @cli.command()
     @click.argument("file_path")
     @click.option("model_id", "-m", "--model", help="Model to use")
     @click.option(
+        "-o",
+        "--output",
+        help="Just show the modified code, without modifying the file",
+        is_flag=True,
+    )
+    @click.option(
         "-v", "--verbose", help="Verbose output of prompt and response", is_flag=True
     )
-    def docsmith(file_path, model_id, verbose):
+    def docsmith(file_path, model_id, output, verbose):
         source = read_source(file_path)
         docstring_generator = partial(
             llm_docstring_generator, model_id=model_id, verbose=verbose
         )
         modified_source = modify_docstring(source, docstring_generator)
-        click.echo(modified_source)
 
+        if output:
+            click.echo(modified_source)
+            return
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Modify Python source code to add docstrings."
-    )
-    parser.add_argument(
-        "filepath", type=str, help="Path to the Python source file to be modified."
-    )
-    parser.add_argument(
-        "--model", type=str, help="LLM model to be used", default="qwen2.5-coder"
-    )
-    args = parser.parse_args()
-
-    source = read_source(args.filepath)
-
-    docstring_generator = partial(llm_docstring_generator, model=args.model)
-    modified_source = modify_docstring(source, docstring_generator)
-
-    with open(args.filepath, "w") as f:
-        f.write(modified_source)
-
-
-if __name__ == "__main__":
-    main()
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(modified_source)
