@@ -4,8 +4,14 @@ from functools import partial
 from typing import Literal, Protocol
 
 import llm
+import click
 import libcst as cst
 from pydantic import BaseModel
+
+
+from llm import hookimpl
+import click
+
 
 PROMPT_FILL = """
 You are a coding assistant whose task is to generate docstrings for existing code.
@@ -92,6 +98,7 @@ def create_docstring_node(docstring_text: str, indent: str) -> cst.BaseStatement
     )
 
 
+# FIXME protocol functions not working
 class DocstringTransformer(cst.CSTTransformer):
     def __init__(self, docstring_generator: DocstringGenerator, module: cst.Module):
         self._current_class: str | None = None
@@ -434,18 +441,23 @@ def docstring_to_str(docstring: Docstring) -> str:
 
 
 def llm_docstring_generator(
-    input_code: str, context: str, template: Documentation, model: str
+    input_code: str, context: str, template: Documentation, model_id: str, verbose: bool
 ) -> Documentation:
     context = f"Important context:\n\n```python\n{context}\n```" if context else ""
-    llm_model = llm.get_model(model)
-    response = llm_model.prompt(
-        PROMPT_FILL.format(
-            CONTEXT=context,
-            CODE=input_code,
-            TEMPLATE=template.model_dump_json(),
-        ),
-        schema=Documentation,
+    model = llm.get_model(model_id)
+    prompt = PROMPT_FILL.format(
+        CONTEXT=context,
+        CODE=input_code,
+        TEMPLATE=template.model_dump_json(),
     )
+
+    if verbose:
+        click.echo(click.style(prompt, fg="yellow", bold=True), err=True)
+
+    response = model.prompt(prompt=prompt, schema=Documentation)
+    if verbose:
+        click.echo(click.style(response, fg="green", bold=True), err=True)
+
     return Documentation.model_validate_json(response.text())
 
 
@@ -459,6 +471,23 @@ def modify_docstring(source_code, docstring_generator: DocstringGenerator):
     module = cst.parse_module(source_code)
     modified_module = module.visit(DocstringTransformer(docstring_generator, module))
     return modified_module.code
+
+
+@hookimpl
+def register_commands(cli):
+    @cli.command()
+    @click.argument("file_path")
+    @click.option("model_id", "-m", "--model", help="Model to use")
+    @click.option(
+        "-v", "--verbose", help="Verbose output of prompt and response", is_flag=True
+    )
+    def docsmith(file_path, model_id, verbose):
+        source = read_source(file_path)
+        docstring_generator = partial(
+            llm_docstring_generator, model_id=model_id, verbose=verbose
+        )
+        modified_source = modify_docstring(source, docstring_generator)
+        click.echo(modified_source)
 
 
 def main():
