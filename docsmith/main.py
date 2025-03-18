@@ -456,7 +456,7 @@ def llm_docstring_generator(
 
 
 def read_source(fpath: str):
-    with open(fpath, "r") as f:
+    with open(fpath, "r", encoding="utf-8") as f:
         source = f.read()
     return source
 
