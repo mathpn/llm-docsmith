@@ -397,18 +397,71 @@ def find_docstring_by_name(doc: Documentation, name: str) -> Docstring | None:
     return entries[0] if entries else None
 
 
+def wrap_text(
+    text: str, indent: str = "", initial_indent: str = "", max_width: int = 88
+) -> str:
+    """Wrap text to max_width, respecting indentation and breaking only between words."""
+    # Split by newlines first to preserve them
+    text = text.replace("\\n", "\n")
+    paragraphs = text.split("\n")
+    result = []
+
+    for paragraph in paragraphs:
+        words = paragraph.split()
+        if not words:
+            # Empty line, preserve it
+            result.append("")
+            continue
+
+        lines = []
+        current_line = initial_indent
+
+        for word in words:
+            # Check if adding this word would exceed max_width
+            if (
+                len(current_line) + len(word) + 1 <= max_width
+                or not current_line.strip()
+            ):
+                # Add word with a space if not the first word on the line
+                if current_line.strip():
+                    current_line += " " + word
+                else:
+                    current_line += word
+            else:
+                # Start a new line
+                lines.append(current_line)
+                current_line = indent + word
+
+        # Add the last line if it's not empty
+        if current_line:
+            lines.append(current_line)
+
+        result.append("\n".join(lines))
+
+    # Join all paragraphs with newlines
+    return "\n".join(result)
+
+
 def docstring_to_str(docstring: Docstring) -> str:
+    wrapped_docstring = wrap_text(docstring.docstring)
+    string = f"{wrapped_docstring}\n"
+
     args_strings = []
     for arg in docstring.args or []:
         if arg.annotation is not None:
-            arg_string = f"    {arg.name} ({arg.annotation}): {arg.description}"
+            prefix = f"    {arg.name} ({arg.annotation}): "
         else:
-            arg_string = f"    {arg.name}: {arg.description}"
-        if arg.default is not None:
-            arg_string += f" (default {arg.default})"
-        args_strings.append(arg_string)
+            prefix = f"    {arg.name}: "
 
-    string = f"{docstring.docstring}\n"
+        description = arg.description
+        if arg.default is not None:
+            description += f" (default {arg.default})"
+
+        # Wrap the argument description with proper indentation
+        wrapped_arg = wrap_text(
+            description, indent=" " * (len(prefix)), initial_indent=prefix
+        )
+        args_strings.append(wrapped_arg)
 
     if args_strings:
         string += f"""\nParameters:
@@ -417,19 +470,26 @@ def docstring_to_str(docstring: Docstring) -> str:
 {"\n".join(args_strings)}
 """
 
-    # XXX
+    # Process return value
     if docstring.ret is not None and (
         docstring.ret.description or docstring.ret.annotation
     ):
         if docstring.ret.annotation:
-            ret_string = f"{docstring.ret.annotation} : {docstring.ret.description}"
+            prefix = f"    {docstring.ret.annotation}:"
+            description = docstring.ret.description
         else:
-            ret_string = f"{docstring.ret.description}"
+            prefix = "    "
+            description = docstring.ret.description
+
+        # Wrap the return description with proper indentation
+        wrapped_return = wrap_text(
+            description, indent=" " * len(prefix), initial_indent=prefix
+        )
 
         string += f"""\nReturns:
 --------
 
-    {ret_string}
+{wrapped_return}
 """
     return string
 
