@@ -1,6 +1,27 @@
 [project]
 name = "docsmith"
 version = "0.1"
+description = "..."
+readme = "README.md"
+authors = [{name = "Matheus Pedroni"}]
+license-files = ["LICENSE.md"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+]
+dependencies = ["llm"]
+requires-python = ">=3.10"
+
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Homepage = "https://github.com/mathpn/llm-docsmith"
+Changelog = "https://github.com/mathpn/llm-docsmith/releases"
+Issues = "https://github.com/mathpn/llm-docsmith/issues"
 
 [project.entry-points.llm]
-markov = "docsmith.main"
+markov = "docsmith"
