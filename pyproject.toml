@@ -10,7 +10,11 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: OS Independent",
 ]
-dependencies = ["llm"]
+dependencies = [
+    "libcst>=1.7.0",
+    "llm>=0.23",
+    "pydantic>=2.10.6",
+]
 requires-python = ">=3.10"
 
 
