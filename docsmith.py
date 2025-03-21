@@ -538,13 +538,19 @@ def register_commands(cli):
     @click.option(
         "-o",
         "--output",
-        help="Just show the modified code, without modifying the file",
+        help="Only show the modified code, without modifying the file",
         is_flag=True,
     )
     @click.option(
         "-v", "--verbose", help="Verbose output of prompt and response", is_flag=True
     )
     def docsmith(file_path, model_id, output, verbose):
+        """Generate and write docstrings to a Python file.
+
+        Example usage:
+
+            llm docsmith ./scripts/main.py
+        """
         source = read_source(file_path)
         docstring_generator = partial(
             llm_docstring_generator, model_id=model_id, verbose=verbose
