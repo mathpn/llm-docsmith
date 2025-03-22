@@ -7,7 +7,7 @@ import libcst as cst
 import llm
 from pydantic import BaseModel
 
-PROMPT_FILL = """
+SYSTEM_PROMPT = """
 You are a coding assistant whose task is to generate docstrings for existing Python code.
 You will receive code without any docstrings.
 Generate the appropiate docstrings for each function, class or method.
@@ -26,8 +26,10 @@ The docstring for a class should summarize its behavior and list the public meth
 
 In the Argument object, describe each argument. In the return object, describe the returned values of the function, if any.
 
-You will receive JSON template below. Fill the slots marked with <SLOT> with the appropriate description. Return as JSON.
+You will receive a JSON template. Fill the slots marked with <SLOT> with the appropriate description. Return as JSON.
+"""
 
+PROMPT_TEMPLATE = """
 {CONTEXT}
 
 Input code:
@@ -502,16 +504,21 @@ def llm_docstring_generator(
 ) -> Documentation:
     context = f"Important context:\n\n```python\n{context}\n```" if context else ""
     model = llm.get_model(model_id)
-    prompt = PROMPT_FILL.format(
+    prompt = PROMPT_TEMPLATE.strip().format(
         CONTEXT=context,
         CODE=input_code,
         TEMPLATE=template.model_dump_json(),
     )
 
     if verbose:
-        click.echo(click.style(prompt, fg="yellow", bold=True), err=True)
+        click.echo(
+            click.style(f"System:\n{SYSTEM_PROMPT}", fg="yellow", bold=True), err=True
+        )
+        click.echo(click.style(f"Prompt:\n{prompt}", fg="yellow", bold=True), err=True)
 
-    response = model.prompt(prompt=prompt, schema=Documentation)
+    response = model.prompt(
+        prompt=prompt, schema=Documentation, system=SYSTEM_PROMPT.strip()
+    )
     if verbose:
         click.echo(click.style(response, fg="green", bold=True), err=True)
 
