@@ -448,15 +448,15 @@ def wrap_text(
 
 
 def docstring_to_str(docstring: Docstring) -> str:
-    wrapped_docstring = wrap_text(docstring.docstring)
+    wrapped_docstring = wrap_text(docstring.docstring.strip())
     string = f"{wrapped_docstring}\n"
 
     args_strings = []
     for arg in docstring.args or []:
         if arg.annotation is not None:
-            prefix = f"    {arg.name} ({arg.annotation}): "
+            prefix = f"    - {arg.name} ({arg.annotation}):"
         else:
-            prefix = f"    {arg.name}: "
+            prefix = f"    - {arg.name}:"
 
         description = arg.description
         if arg.default is not None:
@@ -464,7 +464,7 @@ def docstring_to_str(docstring: Docstring) -> str:
 
         # Wrap the argument description with proper indentation
         wrapped_arg = wrap_text(
-            description, indent=" " * (len(prefix)), initial_indent=prefix
+            description.strip(), indent=" " * 6, initial_indent=prefix
         )
         args_strings.append(wrapped_arg)
 
@@ -480,16 +480,16 @@ def docstring_to_str(docstring: Docstring) -> str:
         docstring.ret.description or docstring.ret.annotation
     ):
         if docstring.ret.annotation:
-            prefix = f"    {docstring.ret.annotation}:"
+            prefix = f"    - {docstring.ret.annotation}:"
             description = docstring.ret.description
+            indent = " " * 6
         else:
             prefix = "    "
             description = docstring.ret.description
+            indent = prefix
 
         # Wrap the return description with proper indentation
-        wrapped_return = wrap_text(
-            description, indent=" " * len(prefix), initial_indent=prefix
-        )
+        wrapped_return = wrap_text(description, indent=indent, initial_indent=prefix)
 
         string += f"""\nReturns:
 --------
