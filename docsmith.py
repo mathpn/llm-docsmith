@@ -117,7 +117,6 @@ class DocstringTransformer(cst.CSTTransformer):
         self.indentation_level += 1
         self._current_class = node.name.value
         source_lines = cst.Module([node]).code
-        # TODO add context
         template = extract_signatures(self.module, node)
         context = get_context(self.module, node)
         doc = self.docstring_gen(source_lines, context, template)
@@ -162,7 +161,6 @@ class DocstringTransformer(cst.CSTTransformer):
         source_lines = cst.Module([updated_node]).code
 
         name = updated_node.name.value
-        # TODO add context
         if self._current_class is None:
             template = extract_signatures(self.module, updated_node)
             context = get_context(self.module, updated_node)
