@@ -97,7 +97,6 @@ def create_docstring_node(docstring_text: str, indent: str) -> cst.BaseStatement
     )
 
 
-# FIXME protocol functions not working
 class DocstringTransformer(cst.CSTTransformer):
     def __init__(self, docstring_generator: DocstringGenerator, module: cst.Module):
         self._current_class: str | None = None
@@ -172,9 +171,6 @@ class DocstringTransformer(cst.CSTTransformer):
 
         new_docstring = find_docstring_by_name(doc, name)
         if new_docstring is None:
-            print("oh no")
-            print(updated_node.name)
-            print(doc)
             return updated_node
 
         new_body = self._modify_docstring(
@@ -193,9 +189,6 @@ class DocstringTransformer(cst.CSTTransformer):
         new_docstring = find_docstring_by_name(self._doc, updated_node.name.value)
 
         if new_docstring is None:
-            print("oh no 2")
-            print(updated_node.name)
-            print(self._doc)
             return updated_node
 
         new_body = self._modify_docstring(
