@@ -131,6 +131,7 @@ class DocstringTransformer(cst.CSTTransformer):
         else:
             body_statements = list(body)
 
+        indent = INDENT * (self.indentation_level + 1)
         # Check if first statement is a docstring
         if (
             body_statements
@@ -139,14 +140,11 @@ class DocstringTransformer(cst.CSTTransformer):
             and isinstance(body_statements[0].body[0].value, cst.SimpleString)
         ):
             # Replace existing docstring
-            new_docstring_node = cst.SimpleStatementLine(
-                body=[cst.Expr(value=cst.SimpleString(f'"""{new_docstring}"""'))]
-            )
+            new_docstring_node = create_docstring_node(new_docstring, indent)
             body_statements[0] = new_docstring_node
 
         # No existing docstring - add new one if provided
         elif new_docstring:
-            indent = INDENT * (self.indentation_level + 1)
             new_docstring_node = create_docstring_node(new_docstring, indent)
             body_statements.insert(0, new_docstring_node)
 
