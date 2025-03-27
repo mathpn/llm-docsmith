@@ -1,5 +1,5 @@
 [project]
-name = "docsmith"
+name = "llm-docsmith"
 version = "0.1"
 description = "Generate Python docstrings automatically with LLM and syntax trees."
 readme = "README.md"
