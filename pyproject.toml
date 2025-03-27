@@ -28,4 +28,4 @@ Changelog = "https://github.com/mathpn/llm-docsmith/releases"
 Issues = "https://github.com/mathpn/llm-docsmith/issues"
 
 [project.entry-points.llm]
-markov = "docsmith"
+docsmith = "docsmith"
