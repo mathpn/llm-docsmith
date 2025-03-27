@@ -1,7 +1,5 @@
 # llm-docsmith
 
-## WIP!
-
 Generate Python docstrings automatically with LLM and syntax trees.
 
 ## Installation
