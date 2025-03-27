@@ -8,6 +8,10 @@ Generate Python docstrings automatically with LLM and syntax trees.
 
 Install this plugin in the same environment as [LLM](https://llm.datasette.io/en/stable/).
 
+```bash
+llm install llm-docsmith
+```
+
 ## Usage
 
 Pass a Python file as argument to `llm docsmith`:
