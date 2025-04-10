@@ -1,11 +1,13 @@
 import ast
 from functools import partial
-from typing import Literal, Protocol
+from typing import Literal, Protocol, Set, Dict, List, Optional, Tuple
 
 import click
 import libcst as cst
 import llm
 from pydantic import BaseModel
+import subprocess
+import re
 
 SYSTEM_PROMPT = """
 You are a coding assistant whose task is to generate docstrings for existing Python code.
@@ -98,12 +100,13 @@ def create_docstring_node(docstring_text: str, indent: str) -> cst.BaseStatement
 
 
 class DocstringTransformer(cst.CSTTransformer):
-    def __init__(self, docstring_generator: DocstringGenerator, module: cst.Module):
+    def __init__(self, docstring_generator: DocstringGenerator, module: cst.Module, changed_entities: Optional[Dict[str, Set[str]]] = None):
         self._current_class: str | None = None
         self._doc: Documentation | None = None
         self.module: cst.Module = module
         self.docstring_gen = docstring_generator
         self.indentation_level = 0
+        self.changed_entities = changed_entities or {"functions": set(), "classes": set()}
 
     def visit_Module(self, node):
         self.module = node
@@ -115,11 +118,14 @@ class DocstringTransformer(cst.CSTTransformer):
     def visit_ClassDef(self, node) -> bool | None:
         self.indentation_level += 1
         self._current_class = node.name.value
-        source_lines = cst.Module([node]).code
-        template = extract_signatures(self.module, node)
-        context = get_context(self.module, node)
-        doc = self.docstring_gen(source_lines, context, template)
-        self._doc = doc
+
+        if self.changed_entities and node.name.value in self.changed_entities["classes"]:
+            source_lines = cst.Module([node]).code
+            template = extract_signatures(self.module, node)
+            context = get_context(self.module, node)
+            doc = self.docstring_gen(source_lines, context, template)
+            self._doc = doc
+
         return super().visit_ClassDef(node)
 
     def _modify_docstring(self, body, new_docstring):
@@ -155,6 +161,11 @@ class DocstringTransformer(cst.CSTTransformer):
 
     def leave_FunctionDef(self, original_node, updated_node):
         self.indentation_level -= 1
+        
+        # Skip if function is not in changed entities
+        if self.changed_entities and updated_node.name.value not in self.changed_entities["functions"]:
+            return updated_node
+            
         source_lines = cst.Module([updated_node]).code
 
         name = updated_node.name.value
@@ -180,6 +191,10 @@ class DocstringTransformer(cst.CSTTransformer):
     def leave_ClassDef(self, original_node, updated_node):
         self.indentation_level -= 1
         self._current_class = None
+
+        # Skip if class is not in changed entities
+        if self.changed_entities and updated_node.name.value not in self.changed_entities["classes"]:
+            return updated_node
 
         if self._doc is None:
             return updated_node
@@ -520,9 +535,9 @@ def read_source(fpath: str):
     return source
 
 
-def modify_docstring(source_code, docstring_generator: DocstringGenerator):
+def modify_docstring(source_code, docstring_generator: DocstringGenerator, changed_entities: Optional[Dict[str, Set[str]]] = None):
     module = cst.parse_module(source_code)
-    modified_module = module.visit(DocstringTransformer(docstring_generator, module))
+    modified_module = module.visit(DocstringTransformer(docstring_generator, module, changed_entities))
     return modified_module.code
 
 
@@ -540,18 +555,37 @@ def register_commands(cli):
     @click.option(
         "-v", "--verbose", help="Verbose output of prompt and response", is_flag=True
     )
-    def docsmith(file_path, model_id, output, verbose):
+    @click.option(
+        "--git", 
+        help="Only update docstrings for functions and classes that have been changed since the last commit",
+        is_flag=True,
+    )
+    @click.option(
+        "--git-base", 
+        help="Git reference to compare against (default: HEAD)",
+        default="HEAD",
+    )
+    def docsmith(file_path, model_id, output, verbose, git, git_base):
         """Generate and write docstrings to a Python file.
 
         Example usage:
 
             llm docsmith ./scripts/main.py
+            llm docsmith ./scripts/main.py --git
         """
         source = read_source(file_path)
         docstring_generator = partial(
             llm_docstring_generator, model_id=model_id, verbose=verbose
         )
-        modified_source = modify_docstring(source, docstring_generator)
+        
+        changed_entities = None
+        if git:
+            changed_entities = get_changed_functions(file_path, git_base)
+            if verbose:
+                click.echo(f"Changed functions: {changed_entities['functions']}")
+                click.echo(f"Changed classes: {changed_entities['classes']}")
+        
+        modified_source = modify_docstring(source, docstring_generator, changed_entities)
 
         if output:
             click.echo(modified_source)
