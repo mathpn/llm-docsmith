@@ -99,6 +99,208 @@ def create_docstring_node(docstring_text: str, indent: str) -> cst.BaseStatement
     )
 
 
+def get_changed_functions(
+    file_path: str, base_ref: str = "HEAD"
+) -> Dict[str, Set[str]]:
+    """
+    Get a dictionary of changed functions and classes in a file compared to a base reference.
+
+    Args:
+        file_path: Path to the Python file
+        base_ref: Git reference to compare against (default: HEAD)
+
+    Returns:
+        Dictionary with keys 'functions' and 'classes' containing sets of changed names
+    """
+    # Get absolute path to the file
+    abs_file_path = os.path.abspath(file_path)
+    file_dir = os.path.dirname(abs_file_path)
+
+    # Try to find the git repository for the file
+    repo_check = subprocess.run(
+        ["git", "-C", file_dir, "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+    )
+
+    if repo_check.returncode != 0:
+        # Not in a git repository or git not installed
+        click.echo(
+            click.style(
+                f"Warning: File '{file_path}' is not in a git repository or git is not installed. Processing all functions and classes.",
+                fg="yellow",
+            ),
+            err=True,
+        )
+        with open(file_path, "r", encoding="utf-8") as f:
+            source = f.read()
+        tree = ast.parse(source)
+        functions = {node.name for node in find_function_definitions(tree)}
+        classes = {node.name for node in find_class_definitions(tree)}
+        return {"functions": functions, "classes": classes}
+
+    # Get the repository root
+    repo_root = repo_check.stdout.strip()
+
+    # Check if file is inside the git repository
+    rel_file_path = os.path.relpath(abs_file_path, repo_root)
+    if rel_file_path.startswith(".."):
+        # File is outside the repository
+        click.echo(
+            click.style(
+                f"Warning: File '{file_path}' is outside any git repository. Processing all functions and classes.",
+                fg="yellow",
+            ),
+            err=True,
+        )
+        with open(file_path, "r", encoding="utf-8") as f:
+            source = f.read()
+        tree = ast.parse(source)
+        functions = {node.name for node in find_function_definitions(tree)}
+        classes = {node.name for node in find_class_definitions(tree)}
+        return {"functions": functions, "classes": classes}
+
+    # Get the diff of the file
+    result = subprocess.run(
+        ["git", "-C", file_dir, "diff", base_ref, "--", rel_file_path],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    diff = result.stdout
+    print(diff)
+
+    # If the file is new, all functions are considered changed
+    if not diff:
+        # Check if the file is new (not tracked by git)
+        result = subprocess.run(
+            ["git", "-C", file_dir, "ls-files", rel_file_path],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if not result.stdout.strip():
+            # File is new, get all functions and classes
+            with open(file_path, "r", encoding="utf-8") as f:
+                source = f.read()
+            tree = ast.parse(source)
+            functions = {node.name for node in find_function_definitions(tree)}
+            classes = {node.name for node in find_class_definitions(tree)}
+            return {"functions": functions, "classes": classes}
+
+    # Parse the diff to find changed functions and classes
+    changed_functions = set()
+    changed_classes = set()
+
+    # Regular expressions to match function and class definitions
+    func_pattern = re.compile(r"^\s[+-]?def\s+([a-zA-Z_][a-zA-Z0-9_]*)")
+    class_pattern = re.compile(r"^\s[+-]?class\s+([a-zA-Z_][a-zA-Z0-9_]*)")
+
+    # Track context to identify modified functions
+    current_function = None
+    current_class = None
+    in_function = False
+    in_class = False
+    in_method = False
+    current_method = None
+
+    # Track method signatures to detect changes
+    method_signatures = {}
+
+    # Track method bodies to detect changes
+    method_bodies = {}
+
+    for line in diff.split("\n"):
+        # Check for function definitions
+        func_match = func_pattern.match(line)
+        if func_match:
+            func_name = func_match.group(1)
+            if line.startswith("+"):
+                # New function added
+                changed_functions.add(func_name)
+            elif line.startswith("-"):
+                # Function removed or modified
+                changed_functions.add(func_name)
+            current_function = func_name
+            in_function = True
+            in_class = False
+            in_method = False
+            current_method = None
+            continue
+
+        # Check for class definitions
+        class_match = class_pattern.match(line)
+        if class_match:
+            class_name = class_match.group(1)
+            if line.startswith("+"):
+                # New class added
+                changed_classes.add(class_name)
+            elif line.startswith("-"):
+                # Class removed or modified
+                changed_classes.add(class_name)
+            current_class = class_name
+            in_class = True
+            in_function = False
+            in_method = False
+            current_method = None
+            continue
+
+        # Check for method definitions
+        if in_class and current_class and "def " in line:
+            method_match = re.match(r"^[+-]\s+def\s+([a-zA-Z_][a-zA-Z0-9_]*)", line)
+            if method_match:
+                method_name = method_match.group(1)
+                current_method = method_name
+                in_method = True
+
+                # Extract the signature part
+                sig_start = line.find("(")
+                if sig_start > 0:
+                    signature = line[sig_start:]
+                    key = f"{current_class}.{method_name}"
+
+                    if line.startswith("+"):
+                        if (
+                            key in method_signatures
+                            and method_signatures[key] != signature
+                        ):
+                            # Method signature changed
+                            changed_classes.add(current_class)
+                        method_signatures[key] = signature
+                    elif line.startswith("-"):
+                        # Method removed or modified
+                        changed_classes.add(current_class)
+
+        # Check for changes in method bodies
+        if in_method and current_method and current_class:
+            raise ValueError()
+            if line.startswith("+") or line.startswith("-"):
+                # Method body changed
+                changed_classes.add(current_class)
+
+        # Check for changes within functions or classes
+        if line.startswith("+") or line.startswith("-"):
+            if in_function and current_function:
+                changed_functions.add(current_function)
+            elif in_class and current_class and not in_method:
+                changed_classes.add(current_class)
+
+        # Check for end of function, class, or method
+        if line.startswith(" ") and (in_function or in_class or in_method):
+            # If we see a line that's not indented, we're out of the function/class/method
+            if not line.startswith("    "):
+                in_function = False
+                in_class = False
+                in_method = False
+                current_method = None
+
+    return {"functions": changed_functions, "classes": changed_classes}
+    # except subprocess.CalledProcessError:
+    #     raise
+    #     # If git command fails, return empty sets
+    #     return {"functions": set(), "classes": set()}
+
+
 class DocstringTransformer(cst.CSTTransformer):
     def __init__(self, docstring_generator: DocstringGenerator, module: cst.Module, changed_entities: Optional[Dict[str, Set[str]]] = None):
         self._current_class: str | None = None
