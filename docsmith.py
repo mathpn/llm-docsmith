@@ -20,7 +20,7 @@ Write documentation only for the code provided as input code.
 The docstring for a function or method should summarize its behavior, side effects, exceptions raised,
 and restrictions on when it can be called (all if applicable).
 Only mention exceptions if there is at least one _explicitly_ raised or reraised exception inside the function or method.
-The docstring prescribes the function or method’s effect as a command, not as a description; e.g. don't write “Returns the pathname ...”.
+The docstring prescribes the function or method's effect as a command, not as a description; e.g. don't write "Returns the pathname ...".
 Do not explain implementation details, do not include information about arguments and return here.
 If the docstring is multiline, the first line should be a very short summary, followed by a blank line and a more ellaborate description.
 Write single-line docstrings if the function is simple.
