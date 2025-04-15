@@ -1,13 +1,18 @@
 import ast
+import os
+import re
+import subprocess
 from functools import partial
-from typing import Literal, Protocol, Set, Dict, List, Optional, Tuple
+from typing import (
+    Literal,
+    Protocol,
+    runtime_checkable,
+)
 
 import click
 import libcst as cst
 import llm
 from pydantic import BaseModel
-import subprocess
-import re
 
 SYSTEM_PROMPT = """
 You are a coding assistant whose task is to generate docstrings for existing Python code.
@@ -99,216 +104,23 @@ def create_docstring_node(docstring_text: str, indent: str) -> cst.BaseStatement
     )
 
 
-def get_changed_functions(
-    file_path: str, base_ref: str = "HEAD"
-) -> Dict[str, Set[str]]:
-    """
-    Get a dictionary of changed functions and classes in a file compared to a base reference.
-
-    Args:
-        file_path: Path to the Python file
-        base_ref: Git reference to compare against (default: HEAD)
-
-    Returns:
-        Dictionary with keys 'functions' and 'classes' containing sets of changed names
-    """
-    # Get absolute path to the file
-    abs_file_path = os.path.abspath(file_path)
-    file_dir = os.path.dirname(abs_file_path)
-
-    # Try to find the git repository for the file
-    repo_check = subprocess.run(
-        ["git", "-C", file_dir, "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-    )
-
-    if repo_check.returncode != 0:
-        # Not in a git repository or git not installed
-        click.echo(
-            click.style(
-                f"Warning: File '{file_path}' is not in a git repository or git is not installed. Processing all functions and classes.",
-                fg="yellow",
-            ),
-            err=True,
-        )
-        with open(file_path, "r", encoding="utf-8") as f:
-            source = f.read()
-        tree = ast.parse(source)
-        functions = {node.name for node in find_function_definitions(tree)}
-        classes = {node.name for node in find_class_definitions(tree)}
-        return {"functions": functions, "classes": classes}
-
-    # Get the repository root
-    repo_root = repo_check.stdout.strip()
-
-    # Check if file is inside the git repository
-    rel_file_path = os.path.relpath(abs_file_path, repo_root)
-    if rel_file_path.startswith(".."):
-        # File is outside the repository
-        click.echo(
-            click.style(
-                f"Warning: File '{file_path}' is outside any git repository. Processing all functions and classes.",
-                fg="yellow",
-            ),
-            err=True,
-        )
-        with open(file_path, "r", encoding="utf-8") as f:
-            source = f.read()
-        tree = ast.parse(source)
-        functions = {node.name for node in find_function_definitions(tree)}
-        classes = {node.name for node in find_class_definitions(tree)}
-        return {"functions": functions, "classes": classes}
-
-    # Get the diff of the file
-    result = subprocess.run(
-        ["git", "-C", file_dir, "diff", base_ref, "--", rel_file_path],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    diff = result.stdout
-    print(diff)
-
-    # If the file is new, all functions are considered changed
-    if not diff:
-        # Check if the file is new (not tracked by git)
-        result = subprocess.run(
-            ["git", "-C", file_dir, "ls-files", rel_file_path],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        if not result.stdout.strip():
-            # File is new, get all functions and classes
-            with open(file_path, "r", encoding="utf-8") as f:
-                source = f.read()
-            tree = ast.parse(source)
-            functions = {node.name for node in find_function_definitions(tree)}
-            classes = {node.name for node in find_class_definitions(tree)}
-            return {"functions": functions, "classes": classes}
-
-    # Parse the diff to find changed functions and classes
-    changed_functions = set()
-    changed_classes = set()
-
-    # Regular expressions to match function and class definitions
-    func_pattern = re.compile(r"^\s[+-]?def\s+([a-zA-Z_][a-zA-Z0-9_]*)")
-    class_pattern = re.compile(r"^\s[+-]?class\s+([a-zA-Z_][a-zA-Z0-9_]*)")
-
-    # Track context to identify modified functions
-    current_function = None
-    current_class = None
-    in_function = False
-    in_class = False
-    in_method = False
-    current_method = None
-
-    # Track method signatures to detect changes
-    method_signatures = {}
-
-    # Track method bodies to detect changes
-    method_bodies = {}
-
-    for line in diff.split("\n"):
-        # Check for function definitions
-        func_match = func_pattern.match(line)
-        if func_match:
-            func_name = func_match.group(1)
-            if line.startswith("+"):
-                # New function added
-                changed_functions.add(func_name)
-            elif line.startswith("-"):
-                # Function removed or modified
-                changed_functions.add(func_name)
-            current_function = func_name
-            in_function = True
-            in_class = False
-            in_method = False
-            current_method = None
-            continue
-
-        # Check for class definitions
-        class_match = class_pattern.match(line)
-        if class_match:
-            class_name = class_match.group(1)
-            if line.startswith("+"):
-                # New class added
-                changed_classes.add(class_name)
-            elif line.startswith("-"):
-                # Class removed or modified
-                changed_classes.add(class_name)
-            current_class = class_name
-            in_class = True
-            in_function = False
-            in_method = False
-            current_method = None
-            continue
-
-        # Check for method definitions
-        if in_class and current_class and "def " in line:
-            method_match = re.match(r"^[+-]\s+def\s+([a-zA-Z_][a-zA-Z0-9_]*)", line)
-            if method_match:
-                method_name = method_match.group(1)
-                current_method = method_name
-                in_method = True
-
-                # Extract the signature part
-                sig_start = line.find("(")
-                if sig_start > 0:
-                    signature = line[sig_start:]
-                    key = f"{current_class}.{method_name}"
-
-                    if line.startswith("+"):
-                        if (
-                            key in method_signatures
-                            and method_signatures[key] != signature
-                        ):
-                            # Method signature changed
-                            changed_classes.add(current_class)
-                        method_signatures[key] = signature
-                    elif line.startswith("-"):
-                        # Method removed or modified
-                        changed_classes.add(current_class)
-
-        # Check for changes in method bodies
-        if in_method and current_method and current_class:
-            raise ValueError()
-            if line.startswith("+") or line.startswith("-"):
-                # Method body changed
-                changed_classes.add(current_class)
-
-        # Check for changes within functions or classes
-        if line.startswith("+") or line.startswith("-"):
-            if in_function and current_function:
-                changed_functions.add(current_function)
-            elif in_class and current_class and not in_method:
-                changed_classes.add(current_class)
-
-        # Check for end of function, class, or method
-        if line.startswith(" ") and (in_function or in_class or in_method):
-            # If we see a line that's not indented, we're out of the function/class/method
-            if not line.startswith("    "):
-                in_function = False
-                in_class = False
-                in_method = False
-                current_method = None
-
-    return {"functions": changed_functions, "classes": changed_classes}
-    # except subprocess.CalledProcessError:
-    #     raise
-    #     # If git command fails, return empty sets
-    #     return {"functions": set(), "classes": set()}
-
-
 class DocstringTransformer(cst.CSTTransformer):
-    def __init__(self, docstring_generator: DocstringGenerator, module: cst.Module, changed_entities: Optional[Dict[str, Set[str]]] = None):
+    def __init__(
+        self,
+        docstring_generator: DocstringGenerator,
+        module: cst.Module,
+        changed_entities: dict[str, set[str]] | None = None,
+    ):
         self._current_class: str | None = None
         self._doc: Documentation | None = None
         self.module: cst.Module = module
         self.docstring_gen = docstring_generator
         self.indentation_level = 0
-        self.changed_entities = changed_entities or {"functions": set(), "classes": set()}
+        self.changed_entities = changed_entities or {
+            "functions": set(),
+            "classes": set(),
+            "methods": set(),
+        }
 
     def visit_Module(self, node):
         self.module = node
@@ -321,7 +133,10 @@ class DocstringTransformer(cst.CSTTransformer):
         self.indentation_level += 1
         self._current_class = node.name.value
 
-        if self.changed_entities and node.name.value in self.changed_entities["classes"]:
+        if (
+            self.changed_entities
+            and node.name.value in self.changed_entities["classes"]
+        ):
             source_lines = cst.Module([node]).code
             template = extract_signatures(self.module, node)
             context = get_context(self.module, node)
@@ -363,14 +178,24 @@ class DocstringTransformer(cst.CSTTransformer):
 
     def leave_FunctionDef(self, original_node, updated_node):
         self.indentation_level -= 1
-        
-        # Skip if function is not in changed entities
-        if self.changed_entities and updated_node.name.value not in self.changed_entities["functions"]:
-            return updated_node
-            
-        source_lines = cst.Module([updated_node]).code
 
+        if self.changed_entities:
+            if (
+                self._current_class
+                and f"{self._current_class}.{updated_node.name.value}"
+                not in self.changed_entities["methods"]
+            ):
+                return updated_node
+            if (
+                not self._current_class
+                and updated_node.name.value not in self.changed_entities["functions"]
+            ):
+                return updated_node
+
+        source_lines = cst.Module([updated_node]).code
         name = updated_node.name.value
+
+        doc = None
         if self._current_class is None:
             template = extract_signatures(self.module, updated_node)
             context = get_context(self.module, updated_node)
@@ -394,8 +219,10 @@ class DocstringTransformer(cst.CSTTransformer):
         self.indentation_level -= 1
         self._current_class = None
 
-        # Skip if class is not in changed entities
-        if self.changed_entities and updated_node.name.value not in self.changed_entities["classes"]:
+        if (
+            self.changed_entities
+            and updated_node.name.value not in self.changed_entities["classes"]
+        ):
             return updated_node
 
         if self._doc is None:
@@ -737,10 +564,168 @@ def read_source(fpath: str):
     return source
 
 
-def modify_docstring(source_code, docstring_generator: DocstringGenerator, changed_entities: Optional[Dict[str, Set[str]]] = None):
+def modify_docstring(
+    source_code,
+    docstring_generator: DocstringGenerator,
+    changed_entities: dict[str, set[str]] | None = None,
+):
     module = cst.parse_module(source_code)
-    modified_module = module.visit(DocstringTransformer(docstring_generator, module, changed_entities))
+    modified_module = module.visit(
+        DocstringTransformer(docstring_generator, module, changed_entities)
+    )
     return modified_module.code
+
+
+def get_changed_lines(file_path: str):
+    abs_file_path = os.path.abspath(file_path)
+    file_dir = os.path.dirname(abs_file_path)
+
+    result = subprocess.run(
+        ["git", "-C", file_dir, "diff", "-U0", file_path],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+
+    lines = result.stdout.splitlines()
+    line_change_regex = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+    modified_lines = []
+
+    for line in lines:
+        match = line_change_regex.match(line)
+        if match:
+            start_line = int(match.group(1))
+            num_lines = int(match.group(2) or "1")
+
+            # Collect all affected line numbers
+            for i in range(num_lines):
+                modified_lines.append(start_line + i)
+
+    return modified_lines
+
+
+class ParentNodeVisitor(ast.NodeVisitor):
+    """
+    Custom AST node visitor that tracks parent-child relationships.
+    """
+
+    def __init__(self):
+        self.parent_map = {}
+
+    def visit(self, node):
+        for child in ast.iter_child_nodes(node):
+            self.parent_map[child] = node
+        super().visit(node)
+
+
+@runtime_checkable
+class ASTNodeWithLines(Protocol):
+    lineno: int
+    end_lineno: int | None
+
+
+def get_node_line_range(node: ASTNodeWithLines) -> tuple[int, int]:
+    """
+    Get the line range (start_line, end_line) for an AST node.
+
+    Args:
+        node: The AST node to get the line range for
+
+    Returns:
+        A tuple containing the start and end line numbers
+    """
+    start_line = node.lineno
+    end_line = getattr(node, "end_lineno", start_line)
+    return start_line, end_line
+
+
+def is_node_in_lines(node: ast.AST, changed_lines: list[int]) -> bool:
+    """
+    Check if an AST node has any lines that were changed.
+
+    Args:
+        node: The AST node to check
+        changed_lines: List of line numbers that were changed
+
+    Returns:
+        True if any line in the node was changed, False otherwise
+    """
+    if isinstance(node, ASTNodeWithLines):
+        start_line, end_line = get_node_line_range(node)
+        return any(start_line <= line <= end_line for line in changed_lines)
+    return False
+
+
+def get_parent_class(
+    node: ast.AST, parent_map: dict[ast.AST, ast.AST]
+) -> ast.ClassDef | None:
+    """
+    Get the parent class of a node if it exists.
+
+    Args:
+        node: The AST node to check
+        parent_map: Dictionary mapping nodes to their parents
+
+    Returns:
+        The parent ClassDef node if the node is a method, None otherwise
+    """
+    parent = parent_map.get(node)
+    if parent and isinstance(parent, ast.ClassDef):
+        return parent
+    return None
+
+
+def get_changed_entities(file_path: str) -> dict[str, set[str]]:
+    """
+    Get a dictionary of changed entities (functions, methods, classes) in a file.
+
+    Args:
+        file_path: Path to the Python file
+
+    Returns:
+        Dictionary with keys 'functions', 'classes', and 'methods' containing sets of changed entity names
+    """
+    changed_lines = get_changed_lines(file_path)
+
+    if not changed_lines:
+        return {"functions": set(), "classes": set(), "methods": set()}
+
+    source = read_source(file_path)
+    tree = ast.parse(source)
+
+    visitor = ParentNodeVisitor()
+    visitor.visit(tree)
+    parent_map = visitor.parent_map
+
+    changed_functions = set()
+    changed_classes = set()
+    changed_methods = set()
+
+    classes_with_changed_methods = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if is_node_in_lines(node, changed_lines):
+                parent_class = get_parent_class(node, parent_map)
+
+                if parent_class:
+                    method_name = f"{parent_class.name}.{node.name}"
+                    changed_methods.add(method_name)
+                    classes_with_changed_methods.add(parent_class.name)
+                else:
+                    changed_functions.add(node.name)
+
+        elif isinstance(node, ast.ClassDef):
+            if is_node_in_lines(node, changed_lines):
+                changed_classes.add(node.name)
+
+    changed_classes.update(classes_with_changed_methods)
+
+    return {
+        "functions": changed_functions,
+        "classes": changed_classes,
+        "methods": changed_methods,
+    }
 
 
 @llm.hookimpl
@@ -758,12 +743,12 @@ def register_commands(cli):
         "-v", "--verbose", help="Verbose output of prompt and response", is_flag=True
     )
     @click.option(
-        "--git", 
+        "--git",
         help="Only update docstrings for functions and classes that have been changed since the last commit",
         is_flag=True,
     )
     @click.option(
-        "--git-base", 
+        "--git-base",
         help="Git reference to compare against (default: HEAD)",
         default="HEAD",
     )
@@ -779,15 +764,19 @@ def register_commands(cli):
         docstring_generator = partial(
             llm_docstring_generator, model_id=model_id, verbose=verbose
         )
-        
+
         changed_entities = None
         if git:
-            changed_entities = get_changed_functions(file_path, git_base)
+            # TODO implement git_base
+            changed_entities = get_changed_entities(file_path)
             if verbose:
                 click.echo(f"Changed functions: {changed_entities['functions']}")
                 click.echo(f"Changed classes: {changed_entities['classes']}")
-        
-        modified_source = modify_docstring(source, docstring_generator, changed_entities)
+                click.echo(f"Changed methods: {changed_entities['methods']}")
+
+        modified_source = modify_docstring(
+            source, docstring_generator, changed_entities
+        )
 
         if output:
             click.echo(modified_source)
