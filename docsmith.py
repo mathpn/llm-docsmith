@@ -580,12 +580,12 @@ def modify_docstring(
     return modified_module.code
 
 
-def get_changed_lines(file_path: str):
+def get_changed_lines(file_path: str, git_base: str = "HEAD"):
     abs_file_path = os.path.abspath(file_path)
     file_dir = os.path.dirname(abs_file_path)
 
     result = subprocess.run(
-        ["git", "-C", file_dir, "diff", "-U0", file_path],
+        ["git", "-C", file_dir, "diff", "-U0", git_base, "--", file_path],
         stdout=subprocess.PIPE,
         text=True,
     )
@@ -679,17 +679,18 @@ def get_parent_class(
     return None
 
 
-def get_changed_entities(file_path: str) -> dict[str, set[str]]:
+def get_changed_entities(file_path: str, git_base: str = "HEAD") -> ChangedEntities:
     """
     Get a dictionary of changed entities (functions, methods, classes) in a file.
 
     Args:
         file_path: Path to the Python file
+        git_base: Git reference to compare against (default: HEAD)
 
     Returns:
         ChangedEntities containing sets of changed entity names
     """
-    changed_lines = get_changed_lines(file_path)
+    changed_lines = get_changed_lines(file_path, git_base)
 
     if not changed_lines:
         return ChangedEntities()
@@ -763,6 +764,7 @@ def register_commands(cli):
 
             llm docsmith ./scripts/main.py
             llm docsmith ./scripts/main.py --git
+            llm docsmith ./scripts/main.py --git --git-base HEAD~1
         """
         source = read_source(file_path)
         docstring_generator = partial(
@@ -771,8 +773,7 @@ def register_commands(cli):
 
         changed_entities = None
         if git:
-            # TODO implement git_base
-            changed_entities = get_changed_entities(file_path)
+            changed_entities = get_changed_entities(file_path, git_base)
             if verbose:
                 click.echo(f"Changed functions: {changed_entities.functions}")
                 click.echo(f"Changed classes: {changed_entities.classes}")
