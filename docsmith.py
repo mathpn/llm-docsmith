@@ -2,6 +2,7 @@ import ast
 import os
 import re
 import subprocess
+from dataclasses import dataclass, field
 from functools import partial
 from typing import (
     Literal,
@@ -104,23 +105,26 @@ def create_docstring_node(docstring_text: str, indent: str) -> cst.BaseStatement
     )
 
 
+@dataclass
+class ChangedEntities:
+    functions: set[str] = field(default_factory=set)
+    classes: set[str] = field(default_factory=set)
+    methods: set[str] = field(default_factory=set)
+
+
 class DocstringTransformer(cst.CSTTransformer):
     def __init__(
         self,
         docstring_generator: DocstringGenerator,
         module: cst.Module,
-        changed_entities: dict[str, set[str]] | None = None,
+        changed_entities: ChangedEntities | None = None,
     ):
         self._current_class: str | None = None
         self._doc: Documentation | None = None
         self.module: cst.Module = module
         self.docstring_gen = docstring_generator
         self.indentation_level = 0
-        self.changed_entities = changed_entities or {
-            "functions": set(),
-            "classes": set(),
-            "methods": set(),
-        }
+        self.changed_entities = changed_entities
 
     def visit_Module(self, node):
         self.module = node
@@ -134,8 +138,8 @@ class DocstringTransformer(cst.CSTTransformer):
         self._current_class = node.name.value
 
         if (
-            self.changed_entities
-            and node.name.value in self.changed_entities["classes"]
+            self.changed_entities is not None
+            and node.name.value in self.changed_entities.classes
         ):
             source_lines = cst.Module([node]).code
             template = extract_signatures(self.module, node)
@@ -179,16 +183,16 @@ class DocstringTransformer(cst.CSTTransformer):
     def leave_FunctionDef(self, original_node, updated_node):
         self.indentation_level -= 1
 
-        if self.changed_entities:
+        if self.changed_entities is not None:
             if (
                 self._current_class
                 and f"{self._current_class}.{updated_node.name.value}"
-                not in self.changed_entities["methods"]
+                not in self.changed_entities.methods
             ):
                 return updated_node
             if (
                 not self._current_class
-                and updated_node.name.value not in self.changed_entities["functions"]
+                and updated_node.name.value not in self.changed_entities.functions
             ):
                 return updated_node
 
@@ -220,8 +224,8 @@ class DocstringTransformer(cst.CSTTransformer):
         self._current_class = None
 
         if (
-            self.changed_entities
-            and updated_node.name.value not in self.changed_entities["classes"]
+            self.changed_entities is not None
+            and updated_node.name.value not in self.changed_entities.classes
         ):
             return updated_node
 
@@ -567,7 +571,7 @@ def read_source(fpath: str):
 def modify_docstring(
     source_code,
     docstring_generator: DocstringGenerator,
-    changed_entities: dict[str, set[str]] | None = None,
+    changed_entities: ChangedEntities | None = None,
 ):
     module = cst.parse_module(source_code)
     modified_module = module.visit(
@@ -683,12 +687,12 @@ def get_changed_entities(file_path: str) -> dict[str, set[str]]:
         file_path: Path to the Python file
 
     Returns:
-        Dictionary with keys 'functions', 'classes', and 'methods' containing sets of changed entity names
+        ChangedEntities containing sets of changed entity names
     """
     changed_lines = get_changed_lines(file_path)
 
     if not changed_lines:
-        return {"functions": set(), "classes": set(), "methods": set()}
+        return ChangedEntities()
 
     source = read_source(file_path)
     tree = ast.parse(source)
@@ -721,11 +725,11 @@ def get_changed_entities(file_path: str) -> dict[str, set[str]]:
 
     changed_classes.update(classes_with_changed_methods)
 
-    return {
-        "functions": changed_functions,
-        "classes": changed_classes,
-        "methods": changed_methods,
-    }
+    return ChangedEntities(
+        functions=changed_functions,
+        classes=changed_classes,
+        methods=changed_methods,
+    )
 
 
 @llm.hookimpl
@@ -770,9 +774,9 @@ def register_commands(cli):
             # TODO implement git_base
             changed_entities = get_changed_entities(file_path)
             if verbose:
-                click.echo(f"Changed functions: {changed_entities['functions']}")
-                click.echo(f"Changed classes: {changed_entities['classes']}")
-                click.echo(f"Changed methods: {changed_entities['methods']}")
+                click.echo(f"Changed functions: {changed_entities.functions}")
+                click.echo(f"Changed classes: {changed_entities.classes}")
+                click.echo(f"Changed methods: {changed_entities.methods}")
 
         modified_source = modify_docstring(
             source, docstring_generator, changed_entities
