@@ -1,6 +1,6 @@
 [project]
 name = "llm-docsmith"
-version = "0.1"
+version = "0.2"
 description = "Generate Python docstrings automatically with LLM and syntax trees."
 readme = "README.md"
 authors = [{name = "Matheus Pedroni"}]
