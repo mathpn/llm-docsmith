@@ -22,6 +22,11 @@ requires-python = ">=3.12"
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+]
+
 [project.urls]
 Homepage = "https://github.com/mathpn/llm-docsmith"
 Changelog = "https://github.com/mathpn/llm-docsmith/releases"
@@ -29,3 +34,6 @@ Issues = "https://github.com/mathpn/llm-docsmith/issues"
 
 [project.entry-points.llm]
 docsmith = "docsmith"
+
+[project.optional-dependencies]
+test = ["pytest"]
