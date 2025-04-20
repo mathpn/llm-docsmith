@@ -154,7 +154,10 @@ class DocstringTransformer(cst.CSTTransformer):
         if isinstance(body, cst.IndentedBlock):
             body_statements = list(body.body)
         elif not isinstance(body, list):
-            return body
+            # Create an IndentedBlock if body is not already one
+            indent = INDENT * (self.indentation_level + 1)
+            new_docstring_node = create_docstring_node(new_docstring, indent)
+            return cst.IndentedBlock(body=[new_docstring_node, body])
         else:
             body_statements = list(body)
 
