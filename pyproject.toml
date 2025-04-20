@@ -33,3 +33,6 @@ Issues = "https://github.com/mathpn/llm-docsmith/issues"
 
 [project.entry-points.llm]
 docsmith = "docsmith"
+
+[project.optional-dependencies]
+test = ["pytest"]
