@@ -1,6 +1,14 @@
 import ast
+import os
+import re
+import subprocess
+from dataclasses import dataclass, field
 from functools import partial
-from typing import Literal, Protocol
+from typing import (
+    Literal,
+    Protocol,
+    runtime_checkable,
+)
 
 import click
 import libcst as cst
@@ -18,7 +26,7 @@ Write documentation only for the code provided as input code.
 The docstring for a function or method should summarize its behavior, side effects, exceptions raised,
 and restrictions on when it can be called (all if applicable).
 Only mention exceptions if there is at least one _explicitly_ raised or reraised exception inside the function or method.
-The docstring prescribes the function or method’s effect as a command, not as a description; e.g. don't write “Returns the pathname ...”.
+The docstring prescribes the function or method's effect as a command, not as a description; e.g. don't write "Returns the pathname ...".
 Do not explain implementation details, do not include information about arguments and return here.
 If the docstring is multiline, the first line should be a very short summary, followed by a blank line and a more ellaborate description.
 Write single-line docstrings if the function is simple.
@@ -97,13 +105,26 @@ def create_docstring_node(docstring_text: str, indent: str) -> cst.BaseStatement
     )
 
 
+@dataclass
+class ChangedEntities:
+    functions: set[str] = field(default_factory=set)
+    classes: set[str] = field(default_factory=set)
+    methods: set[str] = field(default_factory=set)
+
+
 class DocstringTransformer(cst.CSTTransformer):
-    def __init__(self, docstring_generator: DocstringGenerator, module: cst.Module):
+    def __init__(
+        self,
+        docstring_generator: DocstringGenerator,
+        module: cst.Module,
+        changed_entities: ChangedEntities | None = None,
+    ):
         self._current_class: str | None = None
         self._doc: Documentation | None = None
         self.module: cst.Module = module
         self.docstring_gen = docstring_generator
         self.indentation_level = 0
+        self.changed_entities = changed_entities
 
     def visit_Module(self, node):
         self.module = node
@@ -115,11 +136,17 @@ class DocstringTransformer(cst.CSTTransformer):
     def visit_ClassDef(self, node) -> bool | None:
         self.indentation_level += 1
         self._current_class = node.name.value
-        source_lines = cst.Module([node]).code
-        template = extract_signatures(self.module, node)
-        context = get_context(self.module, node)
-        doc = self.docstring_gen(source_lines, context, template)
-        self._doc = doc
+
+        if (
+            self.changed_entities is not None
+            and node.name.value in self.changed_entities.classes
+        ):
+            source_lines = cst.Module([node]).code
+            template = extract_signatures(self.module, node)
+            context = get_context(self.module, node)
+            doc = self.docstring_gen(source_lines, context, template)
+            self._doc = doc
+
         return super().visit_ClassDef(node)
 
     def _modify_docstring(self, body, new_docstring):
@@ -127,7 +154,10 @@ class DocstringTransformer(cst.CSTTransformer):
         if isinstance(body, cst.IndentedBlock):
             body_statements = list(body.body)
         elif not isinstance(body, list):
-            return body
+            # Create an IndentedBlock if body is not already one
+            indent = INDENT * (self.indentation_level + 1)
+            new_docstring_node = create_docstring_node(new_docstring, indent)
+            return cst.IndentedBlock(body=[new_docstring_node, body])
         else:
             body_statements = list(body)
 
@@ -155,9 +185,24 @@ class DocstringTransformer(cst.CSTTransformer):
 
     def leave_FunctionDef(self, original_node, updated_node):
         self.indentation_level -= 1
-        source_lines = cst.Module([updated_node]).code
 
+        if self.changed_entities is not None:
+            if (
+                self._current_class
+                and f"{self._current_class}.{updated_node.name.value}"
+                not in self.changed_entities.methods
+            ):
+                return updated_node
+            if (
+                not self._current_class
+                and updated_node.name.value not in self.changed_entities.functions
+            ):
+                return updated_node
+
+        source_lines = cst.Module([updated_node]).code
         name = updated_node.name.value
+
+        doc = None
         if self._current_class is None:
             template = extract_signatures(self.module, updated_node)
             context = get_context(self.module, updated_node)
@@ -180,6 +225,12 @@ class DocstringTransformer(cst.CSTTransformer):
     def leave_ClassDef(self, original_node, updated_node):
         self.indentation_level -= 1
         self._current_class = None
+
+        if (
+            self.changed_entities is not None
+            and updated_node.name.value not in self.changed_entities.classes
+        ):
+            return updated_node
 
         if self._doc is None:
             return updated_node
@@ -327,7 +378,6 @@ def extract_signature(function_node: ast.FunctionDef | ast.AsyncFunctionDef):
             num_defaults = len(function_node.args.defaults)
 
             # Align defaults with arguments
-            # TODO double check
             default_index = len(function_node.args.args) - num_defaults
             if function_node.args.args.index(arg) >= default_index:
                 default_value = ast.unparse(
@@ -520,10 +570,169 @@ def read_source(fpath: str):
     return source
 
 
-def modify_docstring(source_code, docstring_generator: DocstringGenerator):
+def modify_docstring(
+    source_code,
+    docstring_generator: DocstringGenerator,
+    changed_entities: ChangedEntities | None = None,
+):
     module = cst.parse_module(source_code)
-    modified_module = module.visit(DocstringTransformer(docstring_generator, module))
+    modified_module = module.visit(
+        DocstringTransformer(docstring_generator, module, changed_entities)
+    )
     return modified_module.code
+
+
+def get_changed_lines(file_path: str, git_base: str = "HEAD"):
+    abs_file_path = os.path.abspath(file_path)
+    file_dir = os.path.dirname(abs_file_path)
+
+    result = subprocess.run(
+        ["git", "-C", file_dir, "diff", "-U0", git_base, "--", file_path],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+
+    lines = result.stdout.splitlines()
+    line_change_regex = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+    modified_lines = []
+
+    for line in lines:
+        match = line_change_regex.match(line)
+        if match:
+            start_line = int(match.group(1))
+            num_lines = int(match.group(2) or "1")
+
+            # Collect all affected line numbers
+            for i in range(num_lines):
+                modified_lines.append(start_line + i)
+
+    return modified_lines
+
+
+class ParentNodeVisitor(ast.NodeVisitor):
+    """
+    Custom AST node visitor that tracks parent-child relationships.
+    """
+
+    def __init__(self):
+        self.parent_map = {}
+
+    def visit(self, node):
+        for child in ast.iter_child_nodes(node):
+            self.parent_map[child] = node
+        super().visit(node)
+
+
+@runtime_checkable
+class ASTNodeWithLines(Protocol):
+    lineno: int
+    end_lineno: int | None
+
+
+def get_node_line_range(node: ASTNodeWithLines) -> tuple[int, int]:
+    """
+    Get the line range (start_line, end_line) for an AST node.
+
+    Args:
+        node: The AST node to get the line range for
+
+    Returns:
+        A tuple containing the start and end line numbers
+    """
+    start_line = node.lineno
+    end_line = getattr(node, "end_lineno", start_line)
+    return start_line, end_line
+
+
+def is_node_in_lines(node: ast.AST, changed_lines: list[int]) -> bool:
+    """
+    Check if an AST node has any lines that were changed.
+
+    Args:
+        node: The AST node to check
+        changed_lines: List of line numbers that were changed
+
+    Returns:
+        True if any line in the node was changed, False otherwise
+    """
+    if isinstance(node, ASTNodeWithLines):
+        start_line, end_line = get_node_line_range(node)
+        return any(start_line <= line <= end_line for line in changed_lines)
+    return False
+
+
+def get_parent_class(
+    node: ast.AST, parent_map: dict[ast.AST, ast.AST]
+) -> ast.ClassDef | None:
+    """
+    Get the parent class of a node if it exists.
+
+    Args:
+        node: The AST node to check
+        parent_map: Dictionary mapping nodes to their parents
+
+    Returns:
+        The parent ClassDef node if the node is a method, None otherwise
+    """
+    parent = parent_map.get(node)
+    if parent and isinstance(parent, ast.ClassDef):
+        return parent
+    return None
+
+
+def get_changed_entities(file_path: str, git_base: str = "HEAD") -> ChangedEntities:
+    """
+    Get a dictionary of changed entities (functions, methods, classes) in a file.
+
+    Args:
+        file_path: Path to the Python file
+        git_base: Git reference to compare against (default: HEAD)
+
+    Returns:
+        ChangedEntities containing sets of changed entity names
+    """
+    changed_lines = get_changed_lines(file_path, git_base)
+
+    if not changed_lines:
+        return ChangedEntities()
+
+    source = read_source(file_path)
+    tree = ast.parse(source)
+
+    visitor = ParentNodeVisitor()
+    visitor.visit(tree)
+    parent_map = visitor.parent_map
+
+    changed_functions = set()
+    changed_classes = set()
+    changed_methods = set()
+
+    classes_with_changed_methods = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if is_node_in_lines(node, changed_lines):
+                parent_class = get_parent_class(node, parent_map)
+
+                if parent_class:
+                    method_name = f"{parent_class.name}.{node.name}"
+                    changed_methods.add(method_name)
+                    classes_with_changed_methods.add(parent_class.name)
+                else:
+                    changed_functions.add(node.name)
+
+        elif isinstance(node, ast.ClassDef):
+            if is_node_in_lines(node, changed_lines):
+                changed_classes.add(node.name)
+
+    changed_classes.update(classes_with_changed_methods)
+
+    return ChangedEntities(
+        functions=changed_functions,
+        classes=changed_classes,
+        methods=changed_methods,
+    )
 
 
 @llm.hookimpl
@@ -540,18 +749,41 @@ def register_commands(cli):
     @click.option(
         "-v", "--verbose", help="Verbose output of prompt and response", is_flag=True
     )
-    def docsmith(file_path, model_id, output, verbose):
+    @click.option(
+        "--git",
+        help="Only update docstrings for functions and classes that have been changed since the last commit",
+        is_flag=True,
+    )
+    @click.option(
+        "--git-base",
+        help="Git reference to compare against (default: HEAD)",
+        default="HEAD",
+    )
+    def docsmith(file_path, model_id, output, verbose, git, git_base):
         """Generate and write docstrings to a Python file.
 
         Example usage:
 
             llm docsmith ./scripts/main.py
+            llm docsmith ./scripts/main.py --git
+            llm docsmith ./scripts/main.py --git --git-base HEAD~1
         """
         source = read_source(file_path)
         docstring_generator = partial(
             llm_docstring_generator, model_id=model_id, verbose=verbose
         )
-        modified_source = modify_docstring(source, docstring_generator)
+
+        changed_entities = None
+        if git:
+            changed_entities = get_changed_entities(file_path, git_base)
+            if verbose:
+                click.echo(f"Changed functions: {changed_entities.functions}")
+                click.echo(f"Changed classes: {changed_entities.classes}")
+                click.echo(f"Changed methods: {changed_entities.methods}")
+
+        modified_source = modify_docstring(
+            source, docstring_generator, changed_entities
+        )
 
         if output:
             click.echo(modified_source)
