@@ -378,7 +378,6 @@ def extract_signature(function_node: ast.FunctionDef | ast.AsyncFunctionDef):
             num_defaults = len(function_node.args.defaults)
 
             # Align defaults with arguments
-            # TODO double check
             default_index = len(function_node.args.args) - num_defaults
             if function_node.args.args.index(arg) >= default_index:
                 default_value = ast.unparse(

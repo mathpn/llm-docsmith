@@ -179,6 +179,33 @@ def test_extract_signatures_basic(sample_python_code):
     assert greet_entry.ret.annotation == "str"
 
 
+def test_extract_signatures_incomplete_type_hints():
+    import libcst as cst
+
+    module = cst.parse_module(
+        textwrap.dedent("""
+        def foo(a: int, b, c: str="foo", d=3, e=None) -> bool:
+            return False
+        """)
+    )
+    doc = extract_signatures(module, module)
+    foo_entry = next(e for e in doc.entries if e.name == "foo")
+    assert foo_entry.args is not None
+    assert foo_entry.args[0].name == "a"
+    assert foo_entry.args[0].annotation == "int"
+    assert foo_entry.args[1].name == "b"
+    assert foo_entry.args[1].annotation is None
+    assert foo_entry.args[2].name == "c"
+    assert foo_entry.args[2].annotation == "str"
+    assert foo_entry.args[2].default == "'foo'"
+    assert foo_entry.args[3].name == "d"
+    assert foo_entry.args[3].annotation is None
+    assert foo_entry.args[3].default == "3"
+    assert foo_entry.args[4].name == "e"
+    assert foo_entry.args[4].annotation is None
+    assert foo_entry.args[4].default == "None"
+
+
 def test_extract_signatures_with_complex_types():
     code = textwrap.dedent(
         """
