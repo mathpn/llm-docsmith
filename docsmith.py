@@ -175,8 +175,8 @@ class DocstringTransformer(cst.CSTTransformer):
         self._current_class = node.name.value
 
         if (
-            self.changed_entities is not None
-            and node.name.value in self.changed_entities.classes
+            self.changed_entities is None
+            or node.name.value in self.changed_entities.classes
         ):
             source_lines = cst.Module([node]).code
             template = extract_signatures(self.module, node)

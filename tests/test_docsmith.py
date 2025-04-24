@@ -8,6 +8,7 @@ from docsmith import (
     Argument,
     ChangedEntities,
     Docstring,
+    DocstringTransformer,
     Documentation,
     Return,
     docstring_to_str,
@@ -365,6 +366,104 @@ def test_has_docstring_oneliner_class():
     code = "class Foo: pass"
     node = cst.parse_module(code).body[0]
     assert has_docstring(node) is False
+
+
+def test_docstring_transformer_without_changed_entities():
+    source = textwrap.dedent("""
+    def greet():
+        return "hello"
+
+    class MyClass:
+        def my_method(self):
+            pass
+    """)
+
+    def mock_generator(input_code, context, template):
+        return Documentation(
+            entries=[
+                Docstring(
+                    node_type="function", name="greet", docstring="A test function."
+                ),
+                Docstring(node_type="class", name="MyClass", docstring="A test class."),
+                Docstring(
+                    node_type="function", name="my_method", docstring="A test method."
+                ),
+            ]
+        )
+
+    module = cst.parse_module(source)
+    transformer = DocstringTransformer(mock_generator, module)
+    modified = module.visit(transformer)
+
+    assert "A test function." in modified.code
+    assert "A test class." in modified.code
+    assert "A test method." in modified.code
+
+
+def test_docstring_transformer_with_changed_entities():
+    source = textwrap.dedent("""
+    def changed_function():
+        return True
+
+    def unchanged_function():
+        return False
+
+    class ChangedClass:
+        def changed_method(self):
+            pass
+
+        def unchanged_method(self):
+            pass
+
+    class UnchangedClass:
+        def another_method(self):
+            pass
+    """)
+
+    def mock_generator(input_code, context, template):
+        return Documentation(
+            entries=[
+                Docstring(
+                    node_type="function",
+                    name="changed_function",
+                    docstring="A changed function.",
+                ),
+                Docstring(
+                    node_type="function",
+                    name="unchanged_function",
+                    docstring="An unchanged function.",
+                ),
+                Docstring(
+                    node_type="class", name="ChangedClass", docstring="A changed class."
+                ),
+                Docstring(
+                    node_type="function",
+                    name="changed_method",
+                    docstring="A changed method.",
+                ),
+                Docstring(
+                    node_type="function",
+                    name="unchanged_method",
+                    docstring="An unchanged method.",
+                ),
+            ]
+        )
+
+    changed_entities = ChangedEntities(
+        functions={"changed_function"},
+        classes={"ChangedClass"},
+        methods={"ChangedClass.changed_method"},
+    )
+
+    module = cst.parse_module(source)
+    transformer = DocstringTransformer(mock_generator, module, changed_entities)
+    modified = module.code_for_node(module.visit(transformer))
+
+    assert "A changed function." in modified
+    assert "A changed class." in modified
+    assert "A changed method." in modified
+    assert "An unchanged function." not in modified
+    assert "An unchanged method." not in modified
 
 
 @patch("subprocess.run")
