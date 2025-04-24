@@ -112,6 +112,41 @@ class ChangedEntities:
     methods: set[str] = field(default_factory=set)
 
 
+def has_docstring(node: cst.CSTNode) -> bool:
+    """
+    Check if a node has a docstring.
+
+    A docstring is the first statement in a module, function or class body and must be a string literal.
+    The node can have different types of bodies (IndentedBlock or SimpleStatementSuite) depending on
+    whether it's a compound statement or a simple one-liner.
+    """
+    # Handle simple one-liner functions/classes that use SimpleStatementSuite
+    if isinstance(node.body, cst.SimpleStatementSuite):
+        return False  # One-liners can't have docstrings
+
+    # Handle regular functions/classes with IndentedBlock
+    if isinstance(node.body, cst.IndentedBlock):
+        body_statements = node.body.body
+    else:
+        body_statements = node.body
+
+    if not body_statements:
+        return False
+
+    first_stmt = body_statements[0]
+    if not isinstance(first_stmt, cst.SimpleStatementLine):
+        return False
+
+    if not first_stmt.body:
+        return False
+
+    first_expr = first_stmt.body[0]
+    if not isinstance(first_expr, cst.Expr):
+        return False
+
+    return isinstance(first_expr.value, (cst.SimpleString, cst.ConcatenatedString))
+
+
 class DocstringTransformer(cst.CSTTransformer):
     def __init__(
         self,

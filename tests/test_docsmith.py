@@ -1,6 +1,7 @@
 import textwrap
 from unittest.mock import Mock, patch
 
+import libcst as cst
 import pytest
 
 from docsmith import (
@@ -15,6 +16,7 @@ from docsmith import (
     get_changed_entities,
     get_changed_lines,
     get_context,
+    has_docstring,
     llm_docstring_generator,
     modify_docstring,
     wrap_text,
@@ -183,10 +185,12 @@ def test_extract_signatures_incomplete_type_hints():
     import libcst as cst
 
     module = cst.parse_module(
-        textwrap.dedent("""
+        textwrap.dedent(
+            """
         def foo(a: int, b, c: str="foo", d=3, e=None) -> bool:
             return False
-        """)
+        """
+        )
     )
     doc = extract_signatures(module, module)
     foo_entry = next(e for e in doc.entries if e.name == "foo")
@@ -262,6 +266,105 @@ def test_extract_signatures_private_methods():
     # Should only include public methods
     assert len(doc.entries) == 2  # Test class + public method
     assert all(not entry.name.startswith("_") for entry in doc.entries)
+
+
+def test_has_docstring_regular_function():
+    """Test a regular function with a docstring."""
+    code = '''
+def foo():
+    """This is a docstring."""
+    pass
+'''
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is True
+
+
+def test_has_docstring_no_docstring():
+    """Test a function without a docstring."""
+    code = """
+def foo():
+    pass
+"""
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_empty_function():
+    """Test an empty function."""
+    code = """
+def foo():
+    pass
+"""
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_oneliner():
+    """Test a one-liner function."""
+    code = "def foo(): return 42"
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_class():
+    """Test a class with a docstring."""
+    code = '''
+class Foo:
+    """This is a class docstring."""
+    pass
+'''
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is True
+
+
+def test_has_docstring_class_no_docstring():
+    """Test a class without a docstring."""
+    code = """
+class Foo:
+    pass
+"""
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_concatenated_string():
+    """Test a function with a concatenated string docstring."""
+    code = '''
+def foo():
+    """This is a """    """concatenated docstring."""
+    pass
+'''
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is True
+
+
+def test_has_docstring_first_statement_not_string():
+    """Test a function where first statement is not a string."""
+    code = '''
+def foo():
+    x = 42
+    """This is not a docstring."""
+    pass
+'''
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_empty_class():
+    """Test an empty class."""
+    code = """
+class Foo:
+    pass
+"""
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_oneliner_class():
+    """Test a one-liner class."""
+    code = "class Foo: pass"
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
 
 
 @patch("subprocess.run")
