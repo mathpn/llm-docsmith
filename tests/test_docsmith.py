@@ -466,6 +466,57 @@ def test_docstring_transformer_with_changed_entities():
     assert "An unchanged method." not in modified
 
 
+def test_docstring_transformer_nested_classes():
+    source = textwrap.dedent("""
+    class OuterClass:
+        class InnerClass:
+            def inner_method(self):
+                pass
+
+        def outer_method(self):
+            pass
+    """)
+
+    def mock_generator(input_code, context, template):
+        return Documentation(
+            entries=[
+                Docstring(
+                    node_type="class", name="OuterClass", docstring="Outer class."
+                ),
+                Docstring(
+                    node_type="class", name="InnerClass", docstring="Inner class."
+                ),
+                Docstring(
+                    node_type="function", name="inner_method", docstring="Inner method."
+                ),
+                Docstring(
+                    node_type="function", name="outer_method", docstring="Outer method."
+                ),
+            ]
+        )
+
+    module = cst.parse_module(source)
+    transformer = DocstringTransformer(mock_generator, module)
+    modified = module.visit(transformer)
+
+    assert "Outer class." in modified.code
+    assert "Inner class." in modified.code
+    assert "Inner method." in modified.code
+    assert "Outer method." in modified.code
+
+    changed_entities = ChangedEntities(
+        classes={"OuterClass", "InnerClass"}, methods={"OuterClass.outer_method"}
+    )
+
+    transformer = DocstringTransformer(mock_generator, module, changed_entities)
+    modified = module.visit(transformer)
+
+    assert "Outer class." in modified.code
+    assert "Inner class." in modified.code
+    assert "Outer method." in modified.code
+    assert "Inner method." not in modified.code
+
+
 @patch("subprocess.run")
 def test_get_changed_lines_basic(mock_run):
     mock_run.return_value = Mock(

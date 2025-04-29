@@ -155,13 +155,18 @@ class DocstringTransformer(cst.CSTTransformer):
         changed_entities: ChangedEntities | None = None,
         only_missing: bool = False,
     ):
-        self._current_class: str | None = None
+        self._class_stack: list[str] = []
         self._doc: Documentation | None = None
         self.module: cst.Module = module
         self.docstring_gen = docstring_generator
         self.indentation_level = 0
         self.changed_entities = changed_entities
         self.only_missing = only_missing
+
+    @property
+    def _current_class(self) -> str | None:
+        """Get the current class name from the top of the stack."""
+        return self._class_stack[-1] if self._class_stack else None
 
     def visit_Module(self, node):
         self.module = node
@@ -172,7 +177,7 @@ class DocstringTransformer(cst.CSTTransformer):
 
     def visit_ClassDef(self, node) -> bool | None:
         self.indentation_level += 1
-        self._current_class = node.name.value
+        self._class_stack.append(node.name.value)
 
         if (
             self.changed_entities is None
@@ -264,7 +269,7 @@ class DocstringTransformer(cst.CSTTransformer):
 
     def leave_ClassDef(self, original_node, updated_node):
         self.indentation_level -= 1
-        self._current_class = None
+        self._class_stack.pop()
 
         if (
             self.changed_entities is not None
