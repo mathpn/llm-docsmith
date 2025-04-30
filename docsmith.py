@@ -112,12 +112,48 @@ class ChangedEntities:
     methods: set[str] = field(default_factory=set)
 
 
+def has_docstring(node: cst.CSTNode) -> bool:
+    """
+    Check if a node has a docstring.
+
+    A docstring is the first statement in a module, function or class body and must be a string literal.
+    The node can have different types of bodies (IndentedBlock or SimpleStatementSuite) depending on
+    whether it's a compound statement or a simple one-liner.
+    """
+    # Handle simple one-liner functions/classes that use SimpleStatementSuite
+    if isinstance(node.body, cst.SimpleStatementSuite):
+        return False  # One-liners can't have docstrings
+
+    # Handle regular functions/classes with IndentedBlock
+    if isinstance(node.body, cst.IndentedBlock):
+        body_statements = node.body.body
+    else:
+        body_statements = node.body
+
+    if not body_statements:
+        return False
+
+    first_stmt = body_statements[0]
+    if not isinstance(first_stmt, cst.SimpleStatementLine):
+        return False
+
+    if not first_stmt.body:
+        return False
+
+    first_expr = first_stmt.body[0]
+    if not isinstance(first_expr, cst.Expr):
+        return False
+
+    return isinstance(first_expr.value, (cst.SimpleString, cst.ConcatenatedString))
+
+
 class DocstringTransformer(cst.CSTTransformer):
     def __init__(
         self,
         docstring_generator: DocstringGenerator,
         module: cst.Module,
         changed_entities: ChangedEntities | None = None,
+        only_missing: bool = False,
     ):
         self._class_stack: list[str] = []
         self._doc: Documentation | None = None
@@ -125,6 +161,7 @@ class DocstringTransformer(cst.CSTTransformer):
         self.docstring_gen = docstring_generator
         self.indentation_level = 0
         self.changed_entities = changed_entities
+        self.only_missing = only_missing
 
     @property
     def _current_class(self) -> str | None:
@@ -204,6 +241,9 @@ class DocstringTransformer(cst.CSTTransformer):
             ):
                 return updated_node
 
+        if self.only_missing and has_docstring(updated_node):
+            return updated_node
+
         source_lines = cst.Module([updated_node]).code
         name = updated_node.name.value
 
@@ -235,6 +275,9 @@ class DocstringTransformer(cst.CSTTransformer):
             self.changed_entities is not None
             and updated_node.name.value not in self.changed_entities.classes
         ):
+            return updated_node
+
+        if self.only_missing and has_docstring(updated_node):
             return updated_node
 
         if self._doc is None:
@@ -579,10 +622,13 @@ def modify_docstring(
     source_code,
     docstring_generator: DocstringGenerator,
     changed_entities: ChangedEntities | None = None,
+    only_missing: bool = False,
 ):
     module = cst.parse_module(source_code)
     modified_module = module.visit(
-        DocstringTransformer(docstring_generator, module, changed_entities)
+        DocstringTransformer(
+            docstring_generator, module, changed_entities, only_missing
+        )
     )
     return modified_module.code
 
@@ -764,7 +810,12 @@ def register_commands(cli):
         help="Git reference to compare against (default: HEAD)",
         default="HEAD",
     )
-    def docsmith(file_path, model_id, output, verbose, git, git_base):
+    @click.option(
+        "--only-missing",
+        help="Only add docstrings to entities that don't have them",
+        is_flag=True,
+    )
+    def docsmith(file_path, model_id, output, verbose, git, git_base, only_missing):
         """Generate and write docstrings to a Python file.
 
         Example usage:
@@ -772,6 +823,7 @@ def register_commands(cli):
             llm docsmith ./scripts/main.py
             llm docsmith ./scripts/main.py --git
             llm docsmith ./scripts/main.py --git --git-base HEAD~1
+            llm docsmith ./scripts/main.py --only-missing
         """
         source = read_source(file_path)
         docstring_generator = partial(
@@ -787,7 +839,7 @@ def register_commands(cli):
                 click.echo(f"Changed methods: {changed_entities.methods}")
 
         modified_source = modify_docstring(
-            source, docstring_generator, changed_entities
+            source, docstring_generator, changed_entities, only_missing
         )
 
         if output:

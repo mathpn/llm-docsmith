@@ -17,6 +17,7 @@ from docsmith import (
     get_changed_entities,
     get_changed_lines,
     get_context,
+    has_docstring,
     llm_docstring_generator,
     modify_docstring,
     wrap_text,
@@ -185,10 +186,12 @@ def test_extract_signatures_incomplete_type_hints():
     import libcst as cst
 
     module = cst.parse_module(
-        textwrap.dedent("""
+        textwrap.dedent(
+            """
         def foo(a: int, b, c: str="foo", d=3, e=None) -> bool:
             return False
-        """)
+        """
+        )
     )
     doc = extract_signatures(module, module)
     foo_entry = next(e for e in doc.entries if e.name == "foo")
@@ -264,6 +267,105 @@ def test_extract_signatures_private_methods():
     # Should only include public methods
     assert len(doc.entries) == 2  # Test class + public method
     assert all(not entry.name.startswith("_") for entry in doc.entries)
+
+
+def test_has_docstring_regular_function():
+    """Test a regular function with a docstring."""
+    code = '''
+def foo():
+    """This is a docstring."""
+    pass
+'''
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is True
+
+
+def test_has_docstring_no_docstring():
+    """Test a function without a docstring."""
+    code = """
+def foo():
+    pass
+"""
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_empty_function():
+    """Test an empty function."""
+    code = """
+def foo():
+    pass
+"""
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_oneliner():
+    """Test a one-liner function."""
+    code = "def foo(): return 42"
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_class():
+    """Test a class with a docstring."""
+    code = '''
+class Foo:
+    """This is a class docstring."""
+    pass
+'''
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is True
+
+
+def test_has_docstring_class_no_docstring():
+    """Test a class without a docstring."""
+    code = """
+class Foo:
+    pass
+"""
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_concatenated_string():
+    """Test a function with a concatenated string docstring."""
+    code = '''
+def foo():
+    """This is a """    """concatenated docstring."""
+    pass
+'''
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is True
+
+
+def test_has_docstring_first_statement_not_string():
+    """Test a function where first statement is not a string."""
+    code = '''
+def foo():
+    x = 42
+    """This is not a docstring."""
+    pass
+'''
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_empty_class():
+    """Test an empty class."""
+    code = """
+class Foo:
+    pass
+"""
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
+
+
+def test_has_docstring_oneliner_class():
+    """Test a one-liner class."""
+    code = "class Foo: pass"
+    node = cst.parse_module(code).body[0]
+    assert has_docstring(node) is False
 
 
 def test_docstring_transformer_without_changed_entities():
@@ -413,6 +515,151 @@ def test_docstring_transformer_nested_classes():
     assert "Inner class." in modified.code
     assert "Outer method." in modified.code
     assert "Inner method." not in modified.code
+
+
+def test_only_missing_option():
+    """Test that only_missing option only adds docstrings to entities without them."""
+    source = textwrap.dedent('''
+    class WithDocstring:
+        """This is an existing docstring."""
+        def method_with_doc(self):
+            """This method already has a doc."""
+            pass
+
+        def method_without_doc(self):
+            pass
+
+    class WithoutDocstring:
+        def method_without_doc(self):
+            pass
+
+    def func_with_doc():
+        """This function has a doc."""
+        return True
+
+    def func_without_doc():
+        return False
+    ''')
+
+    def mock_docstring_gen(input_code, context, template):
+        return Documentation(
+            entries=[
+                Docstring(
+                    node_type="class",
+                    name="WithDocstring",
+                    docstring="This should not replace existing docstring",
+                ),
+                Docstring(
+                    node_type="function",
+                    name="method_with_doc",
+                    docstring="This should not replace existing method docstring",
+                ),
+                Docstring(
+                    node_type="function",
+                    name="method_without_doc",
+                    docstring="New method docstring",
+                ),
+                Docstring(
+                    node_type="class",
+                    name="WithoutDocstring",
+                    docstring="New class docstring",
+                ),
+                Docstring(
+                    node_type="function",
+                    name="func_with_doc",
+                    docstring="This should not replace existing function docstring",
+                ),
+                Docstring(
+                    node_type="function",
+                    name="func_without_doc",
+                    docstring="New function docstring",
+                ),
+            ]
+        )
+
+    modified_source = modify_docstring(source, mock_docstring_gen, only_missing=True)
+
+    assert "This is an existing docstring." in modified_source
+    assert "This method already has a doc." in modified_source
+    assert "This function has a doc." in modified_source
+
+    assert "New method docstring" in modified_source
+    assert "New class docstring" in modified_source
+    assert "New function docstring" in modified_source
+
+    assert "This should not replace existing" not in modified_source
+
+
+def test_only_missing_with_git_changes():
+    """Test that only_missing works correctly with git changes tracking."""
+    source = textwrap.dedent('''
+    class ChangedClass:
+        """Existing docstring."""
+        def changed_method_with_doc(self):
+            """Existing method doc."""
+            pass
+
+        def changed_method_without_doc(self):
+            pass
+
+    class UnchangedClass:
+        """Existing docstring."""
+        def unchanged_method(self):
+            """Existing doc."""
+            pass
+    ''')
+
+    def mock_docstring_gen(input_code, context, template):
+        return Documentation(
+            entries=[
+                Docstring(
+                    node_type="class",
+                    name="ChangedClass",
+                    docstring="This should not replace existing class docstring",
+                ),
+                Docstring(
+                    node_type="function",
+                    name="changed_method_with_doc",
+                    docstring="This should not replace existing method docstring",
+                ),
+                Docstring(
+                    node_type="function",
+                    name="changed_method_without_doc",
+                    docstring="New method docstring",
+                ),
+                Docstring(
+                    node_type="class",
+                    name="UnchangedClass",
+                    docstring="This should be ignored - class unchanged",
+                ),
+                Docstring(
+                    node_type="function",
+                    name="unchanged_method",
+                    docstring="This should be ignored - method unchanged",
+                ),
+            ]
+        )
+
+    changed_entities = ChangedEntities(
+        classes={"ChangedClass"},
+        methods={
+            "ChangedClass.changed_method_with_doc",
+            "ChangedClass.changed_method_without_doc",
+        },
+    )
+
+    modified_source = modify_docstring(
+        source, mock_docstring_gen, changed_entities=changed_entities, only_missing=True
+    )
+
+    assert "Existing docstring." in modified_source
+    assert "Existing doc." in modified_source
+    assert "Existing method doc." in modified_source
+
+    assert "New method docstring" in modified_source
+
+    assert "This should not replace existing" not in modified_source
+    assert "This should be ignored" not in modified_source
 
 
 @patch("subprocess.run")
