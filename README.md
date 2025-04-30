@@ -27,6 +27,16 @@ Options:
 - `-v/--verbose`: Verbose output of prompt and response
 - `--git`: Only update docstrings for functions and classes that have been changed since the last commit
 - `--git-base`: Git reference to compare against (default: HEAD)
+- `--only-missing`: Only add docstrings to functions and classes that don't have them yet
+
+## Only Missing Mode
+
+The `--only-missing` flag tells docsmith to only generate docstrings for functions and classes that don't already have one. This is useful when you want to preserve existing docstrings and only add documentation where it's missing:
+
+```bash
+# Only add docstrings where they are missing
+llm docsmith ./scripts/main.py --only-missing
+```
 
 ## Git Integration
 
