@@ -591,6 +591,13 @@ def llm_docstring_generator(
 ) -> Documentation:
     context = f"Important context:\n\n```python\n{context}\n```" if context else ""
     model = llm.get_model(model_id)
+    if not model.supports_schema:
+        raise ValueError(
+            (
+                f"The model {model_id} does not support structured outputs."
+                " Choose a model with structured output support."
+            )
+        )
     prompt = PROMPT_TEMPLATE.strip().format(
         CONTEXT=context,
         CODE=input_code,
