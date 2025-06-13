@@ -1,6 +1,8 @@
 # llm-docsmith
 
-Generate Python docstrings automatically with LLM and syntax trees.
+Generate Python docstrings automatically with LLM and syntax trees and git integration.
+
+Blog post with background on the first release [here](https://mathpn.com/posts/llm-docsmith/).
 
 ## Installation
 
